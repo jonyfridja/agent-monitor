@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'self'; script-src 'self'">
+  <title>agent-monitor</title>
+  <link rel="stylesheet" href="renderer.css">
+</head>
+<body>
+  <header>
+    <h1>agent-monitor</h1>
+    <span id="server-pill" class="pill"></span>
+    <button id="server-toggle"></button>
+  </header>
+
+  <p id="error" class="error" hidden></p>
+  <p id="tray-warn" class="warn" hidden>The menu-bar icon is hidden: macOS has no room for it (menu bar full, or the notch) or it is switched off in System Settings → Menu Bar. The Dock icon is showing instead — free up menu-bar space to get the tray icon back.</p>
+
+  <section>
+    <h2>Phone</h2>
+    <div class="phone">
+      <img id="qr" alt="QR code for the phone URL" width="120" height="120" hidden>
+      <div>
+        <p class="hint">Scan or open on the phone (same Wi-Fi):</p>
+        <code id="url"></code>
+        <button id="copy">Copy URL</button>
+      </div>
+    </div>
+    <label class="opt"><input type="checkbox" id="transcripts"> Let the phone open a session's live transcript</label>
+    <p class="hint">Shows prompts, replies and command output — anyone with the pairing URL can read it.</p>
+  </section>
+
+  <section>
+    <h2>Agents</h2>
+    <div id="agents"></div>
+    <p class="hint">Hooks are read when an agent session starts — restart running sessions to see them.</p>
+  </section>
+
+  <section>
+    <h2>Sessions <span id="session-count" class="count"></span></h2>
+    <ul id="sessions"></ul>
+  </section>
+
+  <section>
+    <h2>Connected phones <span id="viewer-count" class="count"></span></h2>
+    <ul id="viewers"></ul>
+  </section>
+
+  <footer>
+    <label><input type="checkbox" id="login"> Launch at login <span id="login-hint" class="hint"></span></label>
+    <button id="quit" class="danger">Quit agent-monitor</button>
+  </footer>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

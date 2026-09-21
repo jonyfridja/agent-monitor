@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>agent-monitor</title>
+  <link rel="stylesheet" href="/style.css">
+  <script>
+    // Apply the saved theme before first paint (no dark flash for light-theme users).
+    try {
+      var p = JSON.parse(localStorage.getItem('am.prefs') || 'null') || {};
+      var t = p.theme === 'light' || p.theme === 'dark' ? p.theme : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <header>
+    <div class="brand"><span id="conn" class="dot" title="Connection to the host"></span><span class="brand-name">agent-monitor</span></div>
+    <div id="summary"></div>
+    <button id="fs" class="icon" aria-label="Fullscreen">⛶</button>
+    <button id="gear" class="icon" aria-label="Settings" aria-haspopup="true" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </header>
+
+  <div id="scrim" hidden></div>
+  <div id="menu" role="dialog" aria-label="Settings" hidden>
+    <h2>Theme</h2>
+    <div class="segs" role="radiogroup" aria-label="Theme">
+      <label class="seg"><input type="radio" name="theme" value="system"><span>System</span></label>
+      <label class="seg"><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+      <label class="seg"><input type="radio" name="theme" value="light"><span>Light</span></label>
+    </div>
+
+    <h2>Notifications</h2>
+    <label class="opt main"><span>Alerts</span><input type="checkbox" class="sw" data-pref="alerts"></label>
+    <fieldset id="alert-opts">
+      <h2>Alert me for</h2>
+      <label class="opt"><span>Needs approval</span><input type="checkbox" class="sw" data-level="urgent"></label>
+      <label class="opt"><span>Your turn</span><input type="checkbox" class="sw" data-level="attention"></label>
+      <label class="opt"><span>Custom notifications</span><input type="checkbox" class="sw" data-level="info"></label>
+      <h2>How</h2>
+      <label class="opt"><span>Sound</span><input type="checkbox" class="sw" data-pref="sound"></label>
+      <label class="opt"><span>Vibration</span><input type="checkbox" class="sw" data-pref="vibrate"></label>
+      <label class="opt"><span>Screen flash</span><input type="checkbox" class="sw" data-pref="flash"></label>
+      <p id="audio-status" class="hint"></p>
+      <button id="test-alert">Send test alert</button>
+    </fieldset>
+  </div>
+  <main id="list" aria-live="polite"></main>
+  <p id="empty" hidden>No active agent sessions.<br>Start Claude Code or Codex on your Mac.</p>
+  <section id="detail" hidden>
+    <div class="dbar">
+      <button id="back" aria-label="Back to sessions">‹</button>
+      <div class="dtitle"><div id="d-project"></div><div id="d-meta"></div></div>
+      <span id="d-pill"></span>
+    </div>
+    <div id="term" role="log" aria-live="off"></div>
+    <p id="term-note" hidden></p>
+  </section>
+  <div id="toasts"></div>
+  <div id="flash"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

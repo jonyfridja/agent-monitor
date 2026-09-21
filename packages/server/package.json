@@ -1,0 +1,11 @@
+{
+  "name": "@agent-monitor/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@agent-monitor/adapters": "workspace:*",
+    "@agent-monitor/protocol": "workspace:*"
+  }
+}
