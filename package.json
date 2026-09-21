@@ -5,7 +5,8 @@
   "packageManager": "pnpm@11.12.0",
   "engines": { "node": ">=24" },
   "scripts": {
-    "test": "node --test \"packages/*/src/**/*.test.ts\" \"apps/*/src/**/*.test.ts\" \"scripts/*.test.mjs\"",
+    "test": "node scripts/test.mjs",
+    "test:coverage": "node scripts/test.mjs --coverage",
     "stop": "node scripts/stop.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "server": "node packages/server/src/cli.ts",

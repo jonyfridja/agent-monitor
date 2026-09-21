@@ -75,7 +75,7 @@ Session alerts don't pop a toast — the highlighted card is the notification (p
 
 ## Phone settings (⚙)
 
-Theme (System / Dark / Light), master **Alerts** switch, which events alert (needs approval / your turn / custom), and how (sound / vibration / screen flash), plus a test button. Saved in the phone's `localStorage`, so each device keeps its own.
+Theme (System / Dark / Light), **Keep screen on** (Screen Wake Lock where the browser allows it; over plain http a tiny hidden looping video does the job — Android needs one tap to start it), master **Alerts** switch, which events alert (needs approval / your turn / custom), and how (sound / vibration / screen flash), plus a test button. Saved in the phone's `localStorage`, so each device keeps its own.
 
 ## Live transcript
 
@@ -96,7 +96,8 @@ curl -X POST localhost:47821/api/notify -H 'content-type: application/json' \
 ## Develop
 
 ```bash
-pnpm test        # reducer, hook-file editing, adapters, host lifecycle (temp HOME, no real configs touched)
+pnpm test             # 97 tests: reducer, hooks (incl. running the real hook command), adapters, server contract, phone client logic, CLI helpers, host lifecycle
+pnpm test:coverage    # same + a coverage floor (the release gate)
 pnpm typecheck
 ```
 

@@ -1,4 +1,7 @@
 // Phone client: renders sessions from the host's SSE stream and raises in-page alerts.
+// Decisions (status views, unread rules, alert plans) live in core.js and are unit-tested; this file does DOM + storage.
+import { alertPlan, ago, findSession, keepAwakeStatus, key, mergePrefs, parseUnread, pruneUnread as prune, shouldMarkUnread, sortSessions, splitUnread, summarize, view } from './core.js';
+
 const $ = (id) => document.getElementById(id);
 
 // Pairing token comes from the QR/URL once, then lives in localStorage.
@@ -10,13 +13,11 @@ try {
 } catch {}
 
 // ---- preferences (theme + alerts), kept on this phone in localStorage ----
-const DEFAULT_PREFS = { theme: 'system', alerts: true, sound: true, vibrate: true, flash: true, levels: { urgent: true, attention: true, info: true } };
 function loadPrefs() {
   try {
-    const saved = JSON.parse(localStorage.getItem('am.prefs') || 'null') || {};
-    return { ...DEFAULT_PREFS, ...saved, levels: { ...DEFAULT_PREFS.levels, ...(saved.levels || {}) } };
+    return mergePrefs(JSON.parse(localStorage.getItem('am.prefs') || 'null'));
   } catch {
-    return JSON.parse(JSON.stringify(DEFAULT_PREFS));
+    return mergePrefs(null);
   }
 }
 function savePrefs() {
@@ -40,7 +41,6 @@ applyTheme();
 const AGENT = { claude: 'Claude Code', codex: 'Codex' };
 const sessions = new Map(); // "agent:id" -> Session
 let skew = 0; // serverNow - localNow
-const key = (agent, id) => `${agent}:${id}`;
 const serverNow = () => Date.now() + skew;
 
 // ---- unread: sessions that raised an alert you haven't looked at yet (kept on this phone) ----
@@ -49,8 +49,7 @@ const unread = new Set(loadUnread());
 let haveSnapshot = false; // don't prune stored unread state before we know which sessions exist
 function loadUnread() {
   try {
-    const saved = JSON.parse(localStorage.getItem('am.unread') || '[]');
-    return Array.isArray(saved) ? saved.filter((k) => typeof k === 'string') : [];
+    return parseUnread(localStorage.getItem('am.unread'));
   } catch {
     return [];
   }
@@ -67,32 +66,10 @@ function markRead(k) {
   }
 }
 function pruneUnread() {
-  if (!haveSnapshot) return;
-  let changed = false;
-  for (const k of unread) {
-    if (sessions.get(k)?.status !== 'waiting') changed = unread.delete(k) || changed;
-  }
-  if (changed) saveUnread();
+  if (haveSnapshot && prune(unread, sessions)) saveUnread();
 }
 
 // ---- rendering ----
-function view(s) {
-  if (s.status === 'working') return { cls: 'working', label: 'Working', rank: 3 };
-  if (s.status === 'ended') return { cls: 'ended', label: 'Ended', rank: 4 };
-  if (s.reason === 'approval') return { cls: 'approval', label: 'Needs approval', rank: 0 };
-  if (s.reason === 'your-turn') return { cls: 'turn', label: 'Your turn', rank: 1 };
-  if (s.reason === 'stale') return { cls: 'idle', label: 'Idle (no activity)', rank: 2 };
-  return { cls: 'idle', label: 'Idle', rank: 2 };
-}
-
-function ago(ms) {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
 function card(s) {
   const k = key(s.agent, s.id);
   const v = view(s);
@@ -139,9 +116,8 @@ function section(title, count, cls, action) {
 
 function render() {
   pruneUnread();
-  const list = [...sessions.values()].sort((a, b) => view(a).rank - view(b).rank || a.stateSince - b.stateSince);
-  const fresh = list.filter((s) => unread.has(key(s.agent, s.id)));
-  const rest = list.filter((s) => !unread.has(key(s.agent, s.id)));
+  const list = sortSessions(sessions.values());
+  const { fresh, rest } = splitUnread(list, unread);
   const wrap = (items) => {
     const g = document.createElement('div');
     g.className = 'grid';
@@ -167,10 +143,9 @@ function render() {
   }
   $('list').replaceChildren(...nodes);
   $('empty').hidden = list.length > 0;
-  const needs = list.filter((s) => s.status === 'waiting' && s.reason !== 'stale' && s.reason !== 'idle').length;
-  const working = list.filter((s) => s.status === 'working').length;
-  $('summary').textContent = [needs && `${needs} need you`, working && `${working} working`].filter(Boolean).join(' · ');
-  document.title = fresh.length ? `(${fresh.length}) agent-monitor` : 'agent-monitor';
+  const summary = summarize(list, fresh.length);
+  $('summary').textContent = summary.text;
+  document.title = summary.title;
   if (current) renderDetailHead();
   tick();
 }
@@ -183,6 +158,78 @@ function tick() {
 }
 setInterval(tick, 1000);
 
+// ---- keep the screen on ----
+let awakeMode = 'none'; // 'wakelock' | 'video' | 'failed' | 'none'
+let wakeSentinel = null;
+let awakeVideo = null;
+let awakeTimer = null;
+
+function stopKeepAwake() {
+  wakeSentinel?.release?.().catch?.(() => {});
+  wakeSentinel = null;
+  clearInterval(awakeTimer);
+  awakeVideo?.pause();
+  awakeVideo?.remove();
+  awakeVideo = null;
+  awakeMode = 'none';
+}
+
+async function acquireWakeLock() {
+  try {
+    wakeSentinel = await navigator.wakeLock.request('screen');
+    wakeSentinel.addEventListener('release', () => (wakeSentinel = null)); // the browser drops it when the tab is hidden
+    return true;
+  } catch {
+    return false; // insecure page, battery saver, …
+  }
+}
+
+/** NoSleep-style fallback: a muted, looping video from a 2×2 canvas. Playing media keeps mobile browsers awake. */
+function startAwakeVideo() {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 2;
+    if (!canvas.captureStream) return false;
+    const ctx = canvas.getContext('2d');
+    let n = 0;
+    const draw = () => {
+      ctx.fillStyle = n++ % 2 ? '#000000' : '#010101'; // a changing frame keeps the stream producing video
+      ctx.fillRect(0, 0, 2, 2);
+    };
+    draw();
+    awakeTimer = setInterval(draw, 1000);
+    const v = document.createElement('video');
+    v.setAttribute('playsinline', '');
+    v.muted = true;
+    v.loop = true;
+    v.srcObject = canvas.captureStream(1);
+    Object.assign(v.style, { position: 'fixed', left: '0', top: '0', width: '1px', height: '1px', opacity: '0.01', pointerEvents: 'none' });
+    document.body.append(v);
+    awakeVideo = v;
+    v.play().catch(() => {}); // may need a tap first; retried on the next pointerdown
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function applyKeepAwake() {
+  stopKeepAwake();
+  if (prefs.keepAwake) {
+    if (navigator.wakeLock?.request && (await acquireWakeLock())) awakeMode = 'wakelock';
+    else awakeMode = startAwakeVideo() ? 'video' : 'failed';
+  }
+  syncMenu();
+}
+// A Wake Lock is released whenever the page is hidden, and can't be taken while hidden. When the page comes back, take
+// it again — or upgrade from the video fallback if the API is available now.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !prefs.keepAwake) return;
+  const lost = awakeMode === 'wakelock' && !wakeSentinel;
+  const upgradable = awakeMode === 'video' && !!navigator.wakeLock?.request;
+  if (lost || upgradable) void applyKeepAwake();
+});
+
 // ---- alerts (work over plain http; need one tap per page load to unlock audio) ----
 let audio = null;
 function unlock() {
@@ -193,7 +240,12 @@ function unlock() {
   } catch {}
   syncMenu();
 }
-document.addEventListener('pointerdown', unlock); // any tap satisfies the browser's user-gesture rule
+document.addEventListener('pointerdown', () => {
+  unlock(); // any tap satisfies the browser's user-gesture rule
+  if (awakeVideo?.paused) {
+    awakeVideo.play().then(syncMenu, () => {});
+  }
+});
 
 function beep(times, freq) {
   if (!audio) return;
@@ -210,21 +262,19 @@ function beep(times, freq) {
   }
 }
 
-/** Raise flash / sound / vibration for a notice. Returns false when the user's settings muted it. */
+/** Carry out an alert plan (flash / toast / sound / vibration). Returns false when the user's settings muted it. */
 function alertUser(n, force = false) {
-  if (!prefs.alerts) return false;
-  if (!force && prefs.levels[n.level] === false) return false;
+  const plan = alertPlan(prefs, n, force);
+  if (!plan) return false;
 
-  if (prefs.flash) {
+  if (plan.flash) {
     const flash = $('flash');
-    flash.style.background = n.level === 'urgent' ? 'var(--approval)' : n.level === 'attention' ? 'var(--turn)' : 'var(--muted)';
+    flash.style.background = plan.flash;
     flash.classList.remove('go');
     void flash.offsetWidth;
     flash.classList.add('go');
   }
-
-  // A session's alert is shown by its highlighted card. Only notices with no card (custom ones, the test) need a toast.
-  if (!n.sessionId || force) {
+  if (plan.toast) {
     const toast = document.createElement('div');
     toast.className = `toast ${n.level}`;
     toast.innerHTML = '<b></b><span></span>';
@@ -233,24 +283,16 @@ function alertUser(n, force = false) {
     $('toasts').append(toast);
     setTimeout(() => toast.remove(), 6000);
   }
-
-  const urgent = n.level === 'urgent';
-  const attention = n.level === 'attention';
-  if (prefs.sound) beep(urgent ? 3 : attention ? 2 : 1, urgent ? 880 : attention ? 660 : 520);
-  if (prefs.vibrate) navigator.vibrate?.(urgent ? [200, 100, 200, 100, 200] : attention ? [150, 80, 150] : [80]);
+  if (plan.beep) beep(plan.beep.times, plan.beep.freq);
+  if (plan.vibrate) navigator.vibrate?.(plan.vibrate);
   return true;
 }
 
 function handleNotice(n) {
-  const alerted = alertUser(n);
-  if (!alerted || !n.sessionId) return;
-  // Older hosts don't say which agent raised it; session ids are UUIDs, so the id alone finds the card.
-  const s = n.agent ? sessions.get(key(n.agent, n.sessionId)) : [...sessions.values()].find((x) => x.id === n.sessionId);
-  if (!s) return;
-  const k = key(s.agent, s.id);
-  const viewing = current && current.agent === s.agent && current.id === s.id;
-  if (viewing || s.status !== 'waiting') return; // already looking at it / it already moved on
-  unread.add(k);
+  if (!alertUser(n)) return;
+  const s = findSession(sessions, n);
+  if (!s || !shouldMarkUnread(s, current)) return;
+  unread.add(key(s.agent, s.id));
   saveUnread();
 }
 
@@ -260,6 +302,7 @@ function syncMenu() {
   for (const el of document.querySelectorAll('[data-pref]')) el.checked = !!prefs[el.dataset.pref];
   for (const el of document.querySelectorAll('[data-level]')) el.checked = !!prefs.levels[el.dataset.level];
   $('alert-opts').disabled = !prefs.alerts;
+  $('awake-status').textContent = keepAwakeStatus({ on: prefs.keepAwake, mode: awakeMode, playing: !!awakeVideo && !awakeVideo.paused });
   $('audio-status').textContent = !prefs.sound
     ? 'Sound is off.'
     : audio
@@ -284,6 +327,7 @@ $('menu').addEventListener('change', (e) => {
   else if (el.dataset.level) prefs.levels[el.dataset.level] = el.checked;
   savePrefs();
   applyTheme();
+  if (el.dataset.pref === 'keepAwake') void applyKeepAwake();
   syncMenu();
 });
 
@@ -291,6 +335,8 @@ $('test-alert').addEventListener('click', () => {
   unlock();
   alertUser({ title: 'Test alert', body: 'This is how alerts look on this phone.', level: 'attention' }, true);
 });
+
+void applyKeepAwake(); // honours the saved choice on every page load
 
 // ---- connection ----
 const conn = $('conn');
