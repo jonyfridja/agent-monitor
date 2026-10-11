@@ -6,7 +6,7 @@ export function looksLikeAgentMonitor(state: unknown): boolean {
 }
 
 /**
- * Is whatever listens on `port` an agent-monitor server? Independent of how it was launched (tray app, .app, headless,
+ * Is whatever listens on `port` an agent-monitor server? Independent of how it was launched (tray app, .app,
  * renamed copy) — used by `pnpm stop` to find it and by the server CLI to explain EADDRINUSE.
  */
 export async function probeAgentMonitor(port: number, timeoutMs = 1000): Promise<boolean> {

@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_PORT } from '@agent-monitor/protocol';
+import { verifyPassword } from './auth.ts';
 import { defaultConfig, loadConfig, saveConfig } from './config.ts';
 
 let dir: string;
@@ -38,12 +39,26 @@ test('an old config missing newer fields loads with defaults and keeps the user�
   assert.equal(c.agents.codex.enabled, true, 'a missing agent defaults to on');
   assert.equal(c.shareTranscripts, true);
   assert.equal(c.launchAtLogin, false);
-  assert.equal(JSON.parse(await readFile(path, 'utf8')).token, 'keep-me', 'loading never rewrites a config that already has a token');
+  assert.equal(await verifyPassword('123456', c.passwordHash), true, 'the default password until the user changes it');
+  assert.deepEqual(c.tls, { enabled: true }, 'https on by default');
+  const saved = JSON.parse(await readFile(path, 'utf8'));
+  assert.equal(saved.token, 'keep-me', 'the token survives the upgrade');
+  assert.equal(saved.sessionSecret, c.sessionSecret, 'a generated session secret is persisted');
+  assert.equal(saved.passwordHash, c.passwordHash, 'so is the default password hash — never the password itself');
+  assert.doesNotMatch(JSON.stringify(saved), /123456/);
 });
 
 test('save → load round-trips every field', async () => {
   const path = join(dir, 'roundtrip.json');
-  const c = { ...defaultConfig(), port: 6000, launchAtLogin: true, shareTranscripts: false, agents: { claude: { enabled: false }, codex: { enabled: true } } };
+  const c = {
+    ...defaultConfig(),
+    port: 6000,
+    launchAtLogin: true,
+    shareTranscripts: false,
+    agents: { claude: { enabled: false }, codex: { enabled: true } },
+    passwordHash: 'scrypt$1$2$3$salt$hash',
+    tls: { enabled: true, cert: '/c.pem', key: '/k.pem' },
+  };
   await saveConfig(c, path);
   assert.deepEqual(await loadConfig(path), c);
 });
