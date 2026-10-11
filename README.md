@@ -1,33 +1,65 @@
 # agent-monitor
 
-A tiny second screen for your coding agents. A tray app on your Mac runs a local server; an old phone (or any browser on your Wi-Fi) shows which agents are **working** and which are **waiting for you**. Local-only — nothing leaves your network. Supports **Claude Code** and **Codex**.
+A tiny second screen for your coding agents. A menu-bar app on your Mac runs a small local server. An old phone, or any browser on your Wi-Fi, then shows which agents are **working** and which are **waiting for you**. It is local-only and nothing leaves your network. Password-protected and served over HTTPS. Supports **Claude Code** and **Codex**.
+
+- **[First Time Install](setup.md#first-time-install)**: install, choose a password, connect your agents and your phone.
+- **[Updating](setup.md#updating)**: get a new version while keeping your settings, password and hooks.
 
 ```
 Claude Code ─┐ hook (curl, 1s cap, never blocks)
-Codex        ─┴─► POST 127.0.0.1:47821/api/events ─► server ─► SSE ─► phone browser
-                                                        └── tray app (Electron): sessions, phones, agent toggles
+Codex        ─┴─► POST 127.0.0.1:47821/api/events ─► server ─► HTTPS + SSE (password login) ─► phone browser
+                                                        └── tray app (Electron): sessions, phones, password, hooks
 ```
 
-## Host app or `pnpm server`?
+## Commands
 
-You only need **one**. The server (hooks in → live state → phone out) is the engine; the tray app *contains* that same server and adds the window, QR code, settings and tray icon. `pnpm server` runs the bare engine with no GUI — for development or a headless machine. Both use port 47821, so running both gives `EADDRINUSE` (the CLI now says which one is already running). Use `pnpm host` / the `.app` day to day.
+| Command | What it does |
+|---|---|
+| `pnpm host` | Build and start the menu-bar app, detached from the terminal. Output goes to `~/.agent-monitor/host.log`. Running it again opens the window of the instance that's already running. Add `--foreground` to keep it attached (for development). |
+| `pnpm hooks` | Show whether agent-monitor's hooks are in each agent's config. |
+| `pnpm hooks install [claude\|codex]` | Add the hooks (to both agents if you don't name one). |
+| `pnpm hooks uninstall [claude\|codex]` | Remove the hooks, and only agent-monitor's. |
+| `pnpm stop` | Quit agent-monitor (same as **Quit** in the menu). |
+| `pnpm package` | Build a standalone `.app` (see below). |
 
-## Run it
+The menu-bar dot shows the overall state: red = needs approval, green = your turn, amber = working, grey = idle. The number shows how many sessions need you.
+
+## Hooks
+
+agent-monitor **never edits your agents' config on its own**: not at launch, and not when you tick or untick an agent. You add or remove its hooks with `pnpm hooks install` / `pnpm hooks uninstall`, or with the **Install hooks** / **Uninstall** buttons in the window.
+
+- **Files:** `~/.claude/settings.json` (Claude Code) and `~/.codex/hooks.json` (Codex).
+- **What's added:** one entry per event (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`, `SessionEnd`, plus `Notification` for Claude). Each entry runs this command (`pnpm hooks install` prints it too):
+
+  ```
+  AGENT_MONITOR=1 curl -s -m 1 -X POST -H 'content-type: application/json' --data-binary @- 'http://127.0.0.1:47821/api/events?agent=claude' >/dev/null 2>&1 || true
+  ```
+
+  It gives up after 1 second, discards its output and always succeeds, so a stopped agent-monitor never slows or breaks the agent.
+- **Your hooks are kept.** Before the first change, a one-time `*.agent-monitor.bak` copy of the file is made. Uninstall removes only the entries tagged `AGENT_MONITOR=1`. If a file isn't valid JSON, it is reported and left untouched.
+- The agent checkboxes in the window only decide whether that agent's sessions are shown.
+
+Settings (port, password hash, shown agents, TLS) are stored in `~/.agent-monitor/config.json` (mode 0600).
+
+## Security
+
+The phone page is reachable by anything on your Wi-Fi, so it's locked down:
+
+- **Password login.** You must choose a password on first launch; until then every phone login is refused. The strength rules are checked in the window only (the server just requires 6+ characters). The password itself is never written anywhere. `config.json` holds only an scrypt hash (N=32768, r=8, p=1, random 16-byte salt), stored as `scrypt$N$r$p$salt$hash`. A correct login sets an `HttpOnly`, `SameSite=Strict`, `Secure` cookie that lasts 30 days. The cookie is HMAC-signed with a random server secret plus the current hash, so changing the password signs every phone out. Forgot it? Quit agent-monitor, delete the `passwordHash` line from `config.json`, and start it again: the setup screen asks for a new one.
+- **Brute-force limit.** After 5 wrong passwords from one IP, that IP is locked out for 15 minutes. Each failure is also slowed down.
+- **HTTPS** on the same port. A self-signed certificate (P-256, valid for the Mac's LAN IPs, `localhost` and `<name>.local`) is created in `~/.agent-monitor/tls/`. It is re-issued automatically if the Mac's IP changes, which means the phone warns once more. Plain-http requests from the LAN are redirected to https. Hooks keep posting plain http to `127.0.0.1`, so existing hook configs keep working.
+- **Hardening.** Strict Content-Security-Policy, `X-Frame-Options: DENY`, `nosniff`, `no-referrer`, and `no-store` on API responses. Requests whose `Host` isn't an IP, `localhost` or this Mac's name are refused, which blocks DNS rebinding. Hook and notify endpoints accept loopback callers only, and refuse anything that carries a browser `Origin`.
+- Requests from the Mac itself (hooks, the tray window, `curl localhost`) need no login.
+- The QR code holds only the address. The password never travels in a URL.
+
+**No warning on the phone (optional).** Use a locally trusted certificate, e.g. from [mkcert](https://github.com/FiloSottile/mkcert):
 
 ```bash
-pnpm install
-pnpm host          # tray app (menu-bar dot + window)
-pnpm server        # or: headless server only (add --install to write hooks)
+brew install mkcert && mkcert -install
+mkcert -cert-file ~/.agent-monitor/tls/mine.pem -key-file ~/.agent-monitor/tls/mine-key.pem <mac-ip> <mac-name>.local localhost
 ```
 
-1. Launch the host. A dot appears in the menu bar (red = needs approval, green = your turn, amber = working, grey = idle; the number is how many need you).
-2. **Open window** → scan the QR code / open the URL on the phone (same Wi-Fi).
-3. Tap anywhere on the phone once per page load (browsers require it) to allow alert sound. Alert and theme options are behind the ⚙ icon.
-4. **Restart any already-running agent sessions** — hooks are read at session start.
-
-The host writes hooks into `~/.claude/settings.json` and `~/.codex/hooks.json` for enabled agents, alongside your existing hooks (a one-time `*.agent-monitor.bak` copy is made). Untick an agent, or remove hooks, and only agent-monitor's entries are removed. Hooks stay in place when the host is quit; they fail silently.
-
-Settings (port, pairing token, enabled agents) persist in `~/.agent-monitor/config.json`.
+Then add `"tls": { "enabled": true, "cert": "/Users/you/.agent-monitor/tls/mine.pem", "key": "/Users/you/.agent-monitor/tls/mine-key.pem" }` to `config.json`, and install mkcert's root CA (`mkcert -CAROOT` shows where it is) on the phone. To turn HTTPS off completely, set `"tls": { "enabled": false }`.
 
 ## Build the .app
 
@@ -37,7 +69,7 @@ pnpm package      # → apps/host/release/agent-monitor-darwin-arm64/agent-monit
 
 Generates the icon, bundles the host, packages it with `@electron/packager`, and ad-hoc signs it (fine on the Mac that built it; giving it to others needs a real Developer ID). Copy it to `/Applications` to use it. It runs tray-only (`LSUIElement`), and **Launch at login** in its window works for the packaged app only.
 
-`pnpm host` (dev) and the `.app` use the same port — run `pnpm stop` when switching between them.
+`pnpm host` and the `.app` use the same port, so run `pnpm stop` when switching between them. Use the `.app` if agent-monitor should come back after a reboot; `pnpm host` does not.
 
 ## Icons
 
@@ -50,7 +82,7 @@ macOS parks a menu-bar item off-screen when the bar is full (the notch takes the
 ## Stop everything
 
 ```bash
-pnpm stop              # SIGTERM, then SIGKILL after 3s: the tray app (dev or packaged) + helpers, and the headless server
+pnpm stop              # SIGTERM, then SIGKILL after 3s: the tray app (pnpm host or the .app) and its helpers
 pnpm stop --dry-run    # list what it would stop
 ```
 
@@ -75,7 +107,7 @@ Session alerts don't pop a toast — the highlighted card is the notification (p
 
 ## Phone settings (⚙)
 
-Theme (System / Dark / Light), **Keep screen on** (Screen Wake Lock where the browser allows it; over plain http a tiny hidden looping video does the job — Android needs one tap to start it), master **Alerts** switch, which events alert (needs approval / your turn / custom), and how (sound / vibration / screen flash), plus a test button. Saved in the phone's `localStorage`, so each device keeps its own.
+Theme (System / Dark / Light), **Keep screen on** (Screen Wake Lock where the browser allows it; otherwise a tiny hidden looping video does the job, and Android needs one tap to start it), master **Alerts** switch, which events alert (needs approval / your turn / custom), and how (sound / vibration / screen flash), plus a test button. Saved in the phone's `localStorage`, so each device keeps its own.
 
 ## Live transcript
 
@@ -83,20 +115,20 @@ Tap a session on the phone to open a terminal-style live view of its conversatio
 
 - Works for CLI **and** desktop-app sessions (both hand hooks a `transcript_path`); it is a transcript view, not a mirror of a terminal.
 - The phone only names a session. The file path comes from the agent's own hook, must be a `.jsonl` inside `~/.claude` or `~/.codex` (symlinks resolved), and is never sent to the phone.
-- It exposes prompts, code and command output to anyone with the pairing URL, so the host window has a **"Let the phone open a session's live transcript"** switch (default on).
+- It exposes prompts, code and command output to anyone who can open the phone page, so the host window has a **"Let the phone open a session's live transcript"** switch (default on).
 - Already-running sessions get a transcript link on their next event.
 
 ## Custom notifications
 
 ```bash
-curl -X POST localhost:47821/api/notify -H 'content-type: application/json' \
+curl -X POST http://localhost:47821/api/notify -H 'content-type: application/json' \
   -d '{"title":"Deploy done","body":"prod is green","level":"attention"}'   # info | attention | urgent
 ```
 
 ## Develop
 
 ```bash
-pnpm test             # 97 tests: reducer, hooks (incl. running the real hook command), adapters, server contract, phone client logic, CLI helpers, host lifecycle
+pnpm test             # reducer, hooks (incl. running the real hook command), adapters, server contract, auth + HTTPS, phone client logic, CLI helpers, host lifecycle
 pnpm test:coverage    # same + a coverage floor (the release gate)
 pnpm typecheck
 ```
@@ -104,14 +136,16 @@ pnpm typecheck
 | Path | What |
 |---|---|
 | `packages/protocol` | shared types |
-| `packages/server` | HTTP + SSE server, pure `reduce()` state machine, config |
+| `packages/server` | HTTP(S) + SSE server, pure `reduce()` state machine, config, auth (`auth.ts`), certificates (`tls.ts`) |
 | `packages/adapters` | per-agent hook install/uninstall + payload → event mapping |
 | `packages/web/public` | phone UI (no build step) |
-| `apps/host` | Electron tray app; `controller.ts` holds all logic, `main.ts` is thin UI glue |
+| `apps/host` | Electron tray app; `controller.ts` holds all logic, `main.ts` is thin UI glue, `scripts/launch.mjs` is `pnpm host` |
+| `scripts` | `pnpm hooks`, `pnpm stop`, the test runner |
 
 ## Known limits
 
-- Phone alerts are in-page (page must be visible). Android Chrome blocks service workers over plain HTTP; for real system notifications set `chrome://flags/#unsafely-treat-insecure-origin-as-secure` to `http://<mac-ip>:47821`.
-- The phone screen can sleep (Wake Lock needs HTTPS): enable Android "Stay awake while charging".
+- Phone alerts are in-page (the page must be visible). System notifications would need a service worker, and browsers only allow those with a *trusted* certificate (see mkcert above), not a self-signed one you clicked through.
+- The phone screen can still sleep on some browsers: enable Android "Stay awake while charging".
+- `pnpm host` doesn't survive a reboot or logout. For that, use the packaged `.app` with **Launch at login**.
 - Esc-interrupting an agent may not fire a hook; such sessions show as idle after 10 minutes.
 - The `.app` is ad-hoc signed and macOS-arm64 only for now (`process.arch` decides).
