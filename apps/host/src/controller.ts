@@ -1,11 +1,16 @@
 import { EventEmitter } from 'node:events';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createAdapters, type InstallState } from '@agent-monitor/adapters';
 import { AGENT_IDS, type AgentId, type Session, type Viewer } from '@agent-monitor/protocol';
 import {
   CONFIG_PATH,
   createMonitorServer,
   defaultNameSources,
+  DEFAULT_PASSWORD,
+  ensureCert,
+  hashPassword,
+  MIN_PASSWORD,
+  verifyPassword,
   lanAddresses,
   loadConfig,
   saveConfig,
@@ -30,6 +35,12 @@ export interface HostState {
   viewers: Viewer[];
   launchAtLogin: boolean;
   shareTranscripts: boolean;
+  /** No password chosen yet: phones can't log in, and the window shows only the setup form. */
+  needsPassword: boolean;
+  /** HTTPS for phones; set when a certificate loaded. */
+  https: boolean;
+  /** SHA-256 of the self-signed cert, to compare with what the phone shows. */
+  certFingerprint?: string;
 }
 
 export interface ControllerOptions {
@@ -54,6 +65,9 @@ export class Controller extends EventEmitter {
   };
   #error?: string;
   #pending?: NodeJS.Timeout;
+  #tls?: { fingerprint: string };
+  #tlsError?: string;
+  #needsPassword = false;
 
   constructor(opts: ControllerOptions) {
     super();
@@ -68,15 +82,21 @@ export class Controller extends EventEmitter {
   async init(): Promise<void> {
     this.#config = await loadConfig(this.#opts.configPath ?? CONFIG_PATH);
     if (this.#opts.port) this.#config.port = this.#opts.port;
-    await this.#syncHooks();
+    this.#needsPassword = await verifyPassword(DEFAULT_PASSWORD, this.#config.passwordHash);
+    await this.refreshHooks();
     await this.startServer();
   }
 
   async startServer(): Promise<void> {
     if (this.#server) return;
+    const tls = await this.#loadTls();
     const server = createMonitorServer({
       port: this.#config.port,
       token: this.#config.token,
+      passwordHash: this.#config.passwordHash,
+      sessionSecret: this.#config.sessionSecret,
+      setupRequired: this.#needsPassword,
+      tls,
       webDir: this.#opts.webDir,
       shareTranscripts: this.#config.shareTranscripts,
       nameSources: this.#opts.home ? defaultNameSources(this.#opts.home) : undefined,
@@ -91,7 +111,8 @@ export class Controller extends EventEmitter {
       this.#changed();
       return;
     }
-    this.#error = undefined;
+    this.#error = this.#tlsError;
+    this.#tls = tls;
     this.#server = server;
     this.#unsubscribe = [server.store.subscribe(() => this.#changed()), server.onViewersChange(() => this.#changed())];
     this.#changed();
@@ -111,14 +132,28 @@ export class Controller extends EventEmitter {
     this.#config.agents[id].enabled = enabled;
     await saveConfig(this.#config, this.#opts.configPath ?? CONFIG_PATH);
     this.#server?.setEnabledAgents(AGENT_IDS.filter((a) => this.#config.agents[a].enabled));
-    await this.#syncHooks();
     this.#changed();
   }
 
-  /** Re-write hooks for an enabled agent (e.g. after fixing a broken config file). */
-  async reinstall(id: AgentId): Promise<void> {
-    await this.#syncOne(id, true);
-    this.#changed();
+  /** Only on the user's request: add our hook entries to the agent's config file. */
+  async installHooks(id: AgentId): Promise<void> {
+    await this.#hookAction(id, () => this.#adapters[id].install(this.#config.port));
+  }
+
+  /** Only on the user's request: remove our hook entries (and only ours). */
+  async uninstallHooks(id: AgentId): Promise<void> {
+    await this.#hookAction(id, () => this.#adapters[id].uninstall());
+  }
+
+  async #hookAction(id: AgentId, action: () => Promise<void>): Promise<void> {
+    try {
+      await action();
+    } catch (err) {
+      this.#hooks[id] = { hook: 'error', error: err instanceof Error ? err.message : String(err) };
+      this.#changed();
+      return;
+    }
+    await this.refreshHooks();
   }
 
   async setShareTranscripts(value: boolean): Promise<void> {
@@ -128,31 +163,47 @@ export class Controller extends EventEmitter {
     this.#changed();
   }
 
+  /** Change the phone password. Applies at once and signs every phone out. */
+  async setPassword(password: string): Promise<void> {
+    // Strength rules live in the window; here only what keeps the state consistent.
+    if (password.length < MIN_PASSWORD) throw new Error(`The password needs at least ${MIN_PASSWORD} characters.`);
+    if (password === DEFAULT_PASSWORD) throw new Error('Choose something other than the placeholder password.');
+    this.#config.passwordHash = await hashPassword(password);
+    this.#needsPassword = false;
+    await saveConfig(this.#config, this.#opts.configPath ?? CONFIG_PATH);
+    this.#server?.setPasswordHash(this.#config.passwordHash);
+    this.#changed();
+  }
+
+  async #loadTls() {
+    this.#tlsError = undefined;
+    if (!this.#config.tls.enabled) return undefined;
+    try {
+      return await ensureCert(join(dirname(this.#opts.configPath ?? CONFIG_PATH), 'tls'), lanAddresses(), this.#config.tls);
+    } catch (err) {
+      this.#tlsError = `HTTPS is off — no certificate: ${err instanceof Error ? err.message : String(err)}`;
+      return undefined;
+    }
+  }
+
   async setLaunchAtLogin(value: boolean): Promise<void> {
     this.#config.launchAtLogin = value;
     await saveConfig(this.#config, this.#opts.configPath ?? CONFIG_PATH);
     this.#changed();
   }
 
-  async #syncHooks(): Promise<void> {
-    await Promise.all(AGENT_IDS.map((id) => this.#syncOne(id)));
-  }
-
-  /** Enabled → hooks point at our port; disabled → our hooks removed. Foreign hooks are never touched. */
-  async #syncOne(id: AgentId, force = false): Promise<void> {
-    const adapter = this.#adapters[id];
-    try {
-      const state = await adapter.state(this.#config.port);
-      if (this.#config.agents[id].enabled) {
-        if (force || state !== 'installed') await adapter.install(this.#config.port);
-        this.#hooks[id] = { hook: 'installed' };
-      } else {
-        if (state !== 'not-installed') await adapter.uninstall();
-        this.#hooks[id] = { hook: 'not-installed' };
-      }
-    } catch (err) {
-      this.#hooks[id] = { hook: 'error', error: err instanceof Error ? err.message : String(err) };
-    }
+  /** Read (never write) each agent's hook file to show whether our hooks are in it. */
+  async refreshHooks(): Promise<void> {
+    await Promise.all(
+      AGENT_IDS.map(async (id) => {
+        try {
+          this.#hooks[id] = { hook: await this.#adapters[id].state(this.#config.port) };
+        } catch (err) {
+          this.#hooks[id] = { hook: 'error', error: err instanceof Error ? err.message : String(err) };
+        }
+      }),
+    );
+    this.#changed();
   }
 
   state(): HostState {
@@ -163,13 +214,19 @@ export class Controller extends EventEmitter {
     return {
       running: !!this.#server,
       port: this.#config.port,
-      phoneUrl: this.#server && ip ? `http://${ip}:${this.#config.port}/?t=${this.#config.token}` : null,
+      phoneUrl:
+        this.#server && ip
+          ? `${this.#tls ? 'https' : 'http'}://${ip}:${this.#config.port}/`
+          : null,
       error: this.#error,
       agents,
       sessions: this.#server?.store.snapshot() ?? [],
       viewers: this.#server?.viewers() ?? [],
       launchAtLogin: this.#config.launchAtLogin,
       shareTranscripts: this.#config.shareTranscripts,
+      needsPassword: this.#needsPassword,
+      https: !!this.#tls,
+      certFingerprint: this.#tls?.fingerprint,
     };
   }
 

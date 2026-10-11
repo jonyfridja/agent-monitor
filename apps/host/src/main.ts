@@ -75,6 +75,7 @@ function updateTray(state: HostState): void {
           : state.error ?? 'Server stopped',
         enabled: false,
       },
+      ...(state.needsPassword ? [{ label: 'Set a phone password to start…', click: showWindow }] : []),
       ...live.slice(0, 8).map((s) => ({ label: label(s), enabled: false })),
       { type: 'separator' },
       { label: 'Open window', click: showWindow },
@@ -136,6 +137,7 @@ function showWindow(): void {
   } else {
     win.show();
   }
+  void controller.refreshHooks(); // the user may have edited the hook files by hand
   win.focus();
   app.focus({ steal: true });
 }
@@ -149,13 +151,22 @@ if (!app.requestSingleInstanceLock()) {
 
   ipcMain.handle('state', viewState);
   ipcMain.handle('agent:set', (_e, id: AgentId, enabled: boolean) => AGENT_IDS.includes(id) && controller.setAgentEnabled(id, enabled));
-  ipcMain.handle('agent:reinstall', (_e, id: AgentId) => AGENT_IDS.includes(id) && controller.reinstall(id));
+  ipcMain.handle('hooks:install', (_e, id: AgentId) => AGENT_IDS.includes(id) && controller.installHooks(id));
+  ipcMain.handle('hooks:uninstall', (_e, id: AgentId) => AGENT_IDS.includes(id) && controller.uninstallHooks(id));
+  ipcMain.handle('hooks:refresh', () => controller.refreshHooks());
   ipcMain.handle('server:start', () => controller.startServer());
   ipcMain.handle('server:stop', () => controller.stopServer());
   ipcMain.handle('url:copy', () => {
     const url = controller.state().phoneUrl;
     if (url) clipboard.writeText(url);
   });
+  // Resolves to an error message (or null) instead of rejecting: IPC rejections arrive as noisy wrapped errors.
+  ipcMain.handle('password:set', (_e, value: unknown) =>
+    controller.setPassword(typeof value === 'string' ? value : '').then(
+      () => null,
+      (err: Error) => err.message,
+    ),
+  );
   ipcMain.handle('transcripts:set', (_e, value: boolean) => controller.setShareTranscripts(!!value));
   ipcMain.handle('login:set', async (_e, value: boolean) => {
     await controller.setLaunchAtLogin(value);
@@ -181,7 +192,8 @@ if (!app.requestSingleInstanceLock()) {
     setTimeout(checkTray, 1500); // let macOS lay the status item out first
     setInterval(checkTray, 5000); // it moves back on-screen when the user frees up menu-bar space
     // Nothing visible on launch except the tray icon; open the window only when something needs attention.
-    if (controller.state().error) showWindow();
+    // First run (no password chosen yet) or a problem: open the window; otherwise stay quietly in the tray.
+    if (controller.state().error || controller.state().needsPassword) showWindow();
   });
 
   // Release the port and stop the server before exiting.

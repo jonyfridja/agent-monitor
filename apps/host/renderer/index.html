@@ -7,6 +7,27 @@
   <link rel="stylesheet" href="renderer.css">
 </head>
 <body>
+  <!-- First run: a password is required before anything else; then an optional step to install hooks. -->
+  <div id="setup" hidden>
+    <form id="setup-pw" class="setup-step" novalidate>
+      <h1>Welcome to agent-monitor</h1>
+      <p>Choose the password your phone will use to open the dashboard. Phones can't connect until one is set.</p>
+      <input id="setup-pw1" type="password" autocomplete="new-password" placeholder="Password" aria-describedby="setup-rules">
+      <input id="setup-pw2" type="password" autocomplete="new-password" placeholder="Repeat password">
+      <ul id="setup-rules" class="rules"></ul>
+      <p id="setup-error" class="error" hidden></p>
+      <button type="submit" class="primary" disabled>Set password</button>
+    </form>
+    <div id="setup-hooks" class="setup-step" hidden>
+      <h1>Connect your agents</h1>
+      <p>agent-monitor learns what your agents are doing through hooks: a small <code>curl</code> entry per event in the agent's config file. Nothing is added unless you click <b>Install hooks</b>. A backup of the file is made first, and <b>Uninstall</b> (here or in the main window) removes only these entries.</p>
+      <div id="setup-agents"></div>
+      <p class="hint">Restart agent sessions that are already running — hooks are read when a session starts.</p>
+      <button id="setup-done" class="primary">Done</button>
+    </div>
+  </div>
+
+  <div id="main">
   <header>
     <h1>agent-monitor</h1>
     <span id="server-pill" class="pill"></span>
@@ -27,13 +48,28 @@
       </div>
     </div>
     <label class="opt"><input type="checkbox" id="transcripts"> Let the phone open a session's live transcript</label>
-    <p class="hint">Shows prompts, replies and command output — anyone with the pairing URL can read it.</p>
+    <p class="hint">Shows prompts, replies and command output — anyone who can open the phone page can read it.</p>
+  </section>
+
+  <section>
+    <h2>Security</h2>
+    <p id="pw-status" class="hint"></p>
+    <form id="pw-form" class="pw-change" novalidate>
+      <div class="pw">
+        <input id="pw" type="password" autocomplete="new-password" placeholder="New password">
+        <input id="pw2" type="password" autocomplete="new-password" placeholder="Repeat">
+      </div>
+      <ul id="pw-rules" class="rules" hidden></ul>
+      <button type="submit" disabled>Change password</button>
+    </form>
+    <p id="pw-error" class="error" hidden></p>
+    <p id="tls-status" class="hint"></p>
   </section>
 
   <section>
     <h2>Agents</h2>
     <div id="agents"></div>
-    <p class="hint">Hooks are read when an agent session starts — restart running sessions to see them.</p>
+    <p class="hint">agent-monitor never edits these files on its own. <b>Install hooks</b> adds one small <code>curl</code> entry per event to the agent's config (a backup is made first); <b>Uninstall</b> removes only those entries. Agents read hooks when a session starts, so restart running sessions afterwards. The checkbox only decides whether events are shown.</p>
   </section>
 
   <section>
@@ -50,6 +86,8 @@
     <label><input type="checkbox" id="login"> Launch at login <span id="login-hint" class="hint"></span></label>
     <button id="quit" class="danger">Quit agent-monitor</button>
   </footer>
+
+  </div>
 
   <script src="renderer.js"></script>
 </body>
