@@ -143,6 +143,15 @@ main { display: block; }
 #menu .hint { color: var(--muted); font-size: 12px; margin: 10px 0; }
 #menu fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 #menu fieldset:disabled { opacity: .45; }
+body.locked :is(main, #empty, #detail, #summary, #fs, #gear, #toasts) { display: none !important; }
+#login { max-width: 340px; margin: 18vh auto 0; padding: 0 20px; display: flex; flex-direction: column; gap: 12px; text-align: center; }
+#login h1 { font-size: 22px; margin: 0; }
+#login p { color: var(--muted); margin: 0; line-height: 1.5; }
+#login input { padding: 13px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--card); color: var(--text); font: inherit; font-size: 16px; }
+#login button { padding: 13px; border: 0; border-radius: 10px; background: var(--turn); color: #fff; font: inherit; font-weight: 600; }
+#login button:disabled { opacity: .5; }
+#login-error { color: var(--approval) !important; min-height: 1.5em; }
+#logout { width: 100%; padding: 11px; border: 0; border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
 #test-alert { width: 100%; padding: 11px; border: 0; border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
 #test-alert:active { background: var(--border); }
 #test-alert:disabled { opacity: .5; }

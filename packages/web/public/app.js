@@ -4,12 +4,14 @@ import { alertPlan, ago, findSession, keepAwakeStatus, key, mergePrefs, parseUnr
 
 const $ = (id) => document.getElementById(id);
 
-// Pairing token comes from the QR/URL once, then lives in localStorage.
-const params = new URLSearchParams(location.search);
-let token = params.get('t') || '';
+// Auth is a cookie the server sets (password login, or a QR pairing link it swaps for one). Older versions kept the
+// pairing token in localStorage: trade it in once, then forget it.
 try {
-  if (token) localStorage.setItem('am.token', token);
-  else token = localStorage.getItem('am.token') || '';
+  const old = localStorage.getItem('am.token');
+  if (old) {
+    localStorage.removeItem('am.token');
+    location.replace(`/?t=${encodeURIComponent(old)}`);
+  }
 } catch {}
 
 // ---- preferences (theme + alerts), kept on this phone in localStorage ----
@@ -340,10 +342,15 @@ void applyKeepAwake(); // honours the saved choice on every page load
 
 // ---- connection ----
 const conn = $('conn');
+let es = null;
 function connect() {
-  const es = new EventSource(`/api/stream${token ? `?t=${encodeURIComponent(token)}` : ''}`);
+  es?.close();
+  es = new EventSource('/api/stream');
   es.onopen = () => conn.classList.add('on');
-  es.onerror = () => conn.classList.remove('on'); // EventSource reconnects on its own
+  es.onerror = () => {
+    conn.classList.remove('on'); // EventSource reconnects on its own…
+    void checkAuth(); // …unless we were logged out (password changed, cookie expired)
+  };
   es.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     skew = msg.now - Date.now();
@@ -357,7 +364,83 @@ function connect() {
     render();
   };
 }
-connect();
+
+// ---- login ----
+let password = false;
+let setupTimer = null;
+function showLogin(mode) {
+  es?.close();
+  es = null;
+  conn.classList.remove('on');
+  clearInterval(pollTimer);
+  setMenu(false);
+  document.body.classList.add('locked');
+  $('login').hidden = false;
+  const pw = mode === 'password';
+  $('login-text').textContent = {
+    password: 'Enter the password you set on the Mac.',
+    setup: 'No password has been set yet. Open agent-monitor on your Mac and choose one — this page continues by itself.',
+    unpaired: 'This phone is not paired. Scan the QR code in the agent-monitor window on your Mac again.',
+  }[mode];
+  clearTimeout(setupTimer);
+  if (mode === 'setup') setupTimer = setTimeout(() => void checkAuth(), 3000); // wait for the Mac
+  for (const id of ['password', 'login-btn']) $(id).hidden = !pw;
+  if (pw) $('password').focus();
+}
+function hideLogin() {
+  document.body.classList.remove('locked');
+  $('login').hidden = true;
+  $('account').hidden = !password;
+}
+/** Returns true when we may read data; otherwise swaps the screen for the login form. */
+async function checkAuth() {
+  try {
+    const auth = await (await fetch('/api/auth')).json();
+    password = auth.password;
+    if (auth.authed) return true;
+    showLogin(auth.setup ? 'setup' : auth.password ? 'password' : 'unpaired');
+    return false;
+  } catch {
+    return true; // host unreachable: keep the reconnecting view rather than a login form
+  }
+}
+$('login').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = $('login-btn');
+  btn.disabled = true;
+  $('login-error').textContent = '';
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: $('password').value }),
+    });
+    if (res.ok) {
+      $('password').value = '';
+      hideLogin();
+      connect();
+      route();
+      return;
+    }
+    const body = await res.json().catch(() => ({}));
+    $('login-error').textContent =
+      res.status === 429 ? `Too many attempts. Try again in ${Math.ceil((body.retryAfter ?? 60) / 60)} min.` : res.status === 401 ? 'Wrong password.' : `Login failed (${res.status}).`;
+  } catch {
+    $('login-error').textContent = 'Cannot reach the Mac.';
+  } finally {
+    btn.disabled = false;
+  }
+});
+$('logout').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  showLogin('password');
+});
+
+void checkAuth().then((ok) => {
+  if (!ok) return;
+  hideLogin();
+  connect();
+});
 
 // ---- session detail: live, terminal-style transcript ----
 let current = null; // { agent, id } while a session is open
@@ -420,8 +503,9 @@ async function pollTranscript(first) {
   if (!current || document.hidden) return;
   const { agent, id } = current;
   try {
-    const res = await fetch(`/api/transcript?agent=${agent}&id=${encodeURIComponent(id)}${token ? `&t=${encodeURIComponent(token)}` : ''}`);
+    const res = await fetch(`/api/transcript?agent=${agent}&id=${encodeURIComponent(id)}`);
     if (!current || current.id !== id) return; // navigated away meanwhile
+    if (res.status === 401) return void (await checkAuth());
     if (res.status === 403) return void (noteTerm('Transcript viewing is turned off in the host app.'), $('term').replaceChildren());
     if (res.status === 404) return void (noteTerm('No transcript available for this session yet.'), $('term').replaceChildren());
     if (!res.ok) throw new Error(String(res.status));
