@@ -2,15 +2,13 @@
 
 /**
  * Only these are ever killed. Anchored to the *executable* at the start of the command line, so a shell or editor
- * whose command text merely mentions these paths (`bash -lc "… cli.ts …"`) is never matched.
+ * whose command text merely mentions these paths (`bash -lc "… agent-monitor.app …"`) is never matched.
  */
 export const PATTERNS = [
   // `pnpm host`: this repo's own Electron binary (main process and its Helper processes).
   { name: 'host app (dev)', re: /^\/\S*\/agent-monitor\/\S*\/electron\/dist\/Electron\.app\/Contents\// },
   // The built .app (main process and helpers), wherever it was copied to.
   { name: 'host app (packaged)', re: /^\/\S*\/agent-monitor\.app\/Contents\// },
-  // `pnpm server`: the headless runner (`node …/packages/server/src/cli.ts`).
-  { name: 'headless server', re: /^(?:\S*\/)?node\s+(?:-\S+\s+)*\S*packages\/server\/src\/cli\.ts(?:\s|$)/ },
 ];
 
 /** An Electron *main* process: `…/Electron.app/Contents/MacOS/Electron`. */

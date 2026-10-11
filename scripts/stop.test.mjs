@@ -29,14 +29,15 @@ test('parsePs reads pid, ppid and the whole command line', () => {
   assert.deepEqual(procs.find((p) => p.pid === 400), { pid: 400, ppid: 1, command: `node ${R}/packages/server/src/cli.ts` });
 });
 
-test('selects the dev app + helpers, the packaged app + helpers and the headless server — nothing else', () => {
+test('selects the dev app + helpers and the packaged app + helpers — nothing else', () => {
   const pids = findTargets(parsePs(ps), 600).map((t) => t.pid).sort((a, b) => a - b);
-  assert.deepEqual(pids, [200, 201, 300, 301, 400, 510, 511]);
+  assert.deepEqual(pids, [200, 201, 300, 301, 510, 511]);
 });
 
 test("does not touch other Electron apps, Claude, unrelated node processes, or shells/editors that merely mention our paths", () => {
   const pids = findTargets(parsePs(ps), 600).map((t) => t.pid);
-  for (const other of [1, 100, 500, 501, 502, 777, 520, 521, 522]) assert.ok(!pids.includes(other), `pid ${other}`);
+  // 400: the old headless runner, gone since `pnpm host` is the only launcher (a leftover one is still found by port).
+  for (const other of [1, 100, 400, 500, 501, 502, 777, 520, 521, 522]) assert.ok(!pids.includes(other), `pid ${other}`);
 });
 
 test('a relative-path `electron .` main is found through its helper, and only ours', () => {
@@ -49,9 +50,9 @@ test('never targets itself or its ancestors, even if their command line matches'
   // `pnpm stop` run from inside the app's own process tree: the script's parent chain is protected.
   const procs = parsePs(`
     50     1 ${R}/node_modules/.pnpm/electron@1/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron .
-    60    50 node ${R}/packages/server/src/cli.ts
+    60    50 ${R}/node_modules/.pnpm/electron@1/node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper
     70    60 node ${R}/scripts/stop.mjs
-    80     1 node ${R}/packages/server/src/cli.ts
+    80     1 ${R}/node_modules/.pnpm/electron@1/node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper
   `);
   assert.deepEqual([...ancestors(procs, 70)].sort((x, y) => x - y), [1, 50, 60, 70]);
   assert.deepEqual(findTargets(procs, 70).map((t) => t.pid), [80]);

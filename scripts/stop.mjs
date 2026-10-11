@@ -1,7 +1,7 @@
-// `pnpm stop` — stop every agent-monitor process: the tray app (dev or packaged), its helpers, the headless server.
+// `pnpm stop` — stop every agent-monitor process: the tray app (dev or packaged) and its helpers.
 //   pnpm stop [--dry-run] [--port N]
 // Two independent ways to recognise our processes, so a change of launcher can't hide one:
-//   1. by executable path (dev Electron, the .app, `node …/cli.ts`)
+//   1. by executable path (dev Electron, the .app)
 //   2. by port: whatever listens on the port AND answers /api/state like agent-monitor
 // Graceful first (SIGTERM), then SIGKILL for anything still alive after the grace period.
 // Anything else holding the port is reported, never killed.
