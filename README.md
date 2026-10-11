@@ -5,6 +5,10 @@ A tiny second screen for your coding agents. A menu-bar app on your Mac runs a s
 - **[First Time Install](setup.md#first-time-install)**: install, choose a password, connect your agents and your phone.
 - **[Updating](setup.md#updating)**: get a new version while keeping your settings, password and hooks.
 
+[![agent-monitor demo: a Claude Code session on the left, the phone dashboard on the right](docs/demo.gif)](docs/demo.mp4)
+
+<sub>A real, unedited recording (41 s): Claude Code asks for permission, so the phone card turns red; once approved and finished, it turns green ("your turn"), and the phone opens the live transcript. [Watch the MP4](docs/demo.mp4).</sub>
+
 ```
 Claude Code ─┐ hook (curl, 1s cap, never blocks)
 Codex        ─┴─► POST 127.0.0.1:47821/api/events ─► server ─► HTTPS + SSE (password login) ─► phone browser
