@@ -6,3 +6,4 @@ apps/host/build
 apps/host/release
 
 .boost
+.playwright-mcp
