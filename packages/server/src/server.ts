@@ -7,9 +7,11 @@ import { readFile } from 'node:fs/promises';
 import { homedir, networkInterfaces } from 'node:os';
 import { extname, join, normalize as normalizePath, sep } from 'node:path';
 import { normalize } from '@agent-monitor/adapters';
-import type { AgentId, NoticeLevel, StreamMessage, Viewer } from '@agent-monitor/protocol';
+import { AGENT_IDS, type AgentId, type NoticeLevel, type StreamMessage, type Viewer } from '@agent-monitor/protocol';
 import { SessionStore } from './store.ts';
 import { defaultNameSources, NameResolver, type NameSources } from './names.ts';
+import { claudeCwd, findClaudeTranscript, listRecentClaudeTranscripts } from './claudeTranscripts.ts';
+import { cursorCwds, findCursorTranscript, listRecentCursorTranscripts, RECENT_CURSOR_TRANSCRIPT_MS } from './cursorTranscripts.ts';
 import { readTranscript, resolveTranscript } from './transcript.ts';
 import { allowedHost, LoginLimiter, parseCookies, safeEqual, Sessions, verifyPassword } from './auth.ts';
 
@@ -33,10 +35,20 @@ export interface ServerOptions {
   host?: string;
   /** Serve conversation logs to phones. Default true; can be flipped at runtime. */
   shareTranscripts?: boolean;
-  /** Directories a transcript file must live under. Default: ~/.claude and ~/.codex. */
+  /** Directories a transcript file must live under. Default: ~/.claude, ~/.codex, and ~/.cursor. */
   transcriptRoots?: string[];
-  /** Where to look up the harness's own session names. Default: the real ~/.claude and ~/.codex. */
+  /** Where to look up the harness's own session names. Default: the real ~/.claude, ~/.codex, and ~/.cursor. */
   nameSources?: NameSources;
+  /**
+   * `~/.cursor/projects`, where Cursor (IDE and CLI) writes `agent-transcripts/<id>/<id>.jsonl`.
+   * Default: that directory under the home folder. Hooks often omit the path, so the server looks here.
+   */
+  cursorProjectsDir?: string;
+  /**
+   * `~/.claude/projects`, where Claude Code (CLI and the desktop app) writes `<slug>/<sessionId>.jsonl`.
+   * Default: that directory under the home folder. Same lookup as Cursor when a hook omits the path.
+   */
+  claudeProjectsDir?: string;
 }
 
 export interface MonitorServer {
@@ -106,6 +118,8 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+const isAgent = (v: string | null): v is AgentId => v !== null && (AGENT_IDS as readonly string[]).includes(v);
+
 function send(res: ServerResponse, status: number, body?: unknown): void {
   if (body === undefined) {
     res.writeHead(status).end();
@@ -116,10 +130,14 @@ function send(res: ServerResponse, status: number, body?: unknown): void {
 
 export function createMonitorServer(opts: ServerOptions): MonitorServer {
   const store = new SessionStore({ staleMs: opts.staleMs });
-  const enabled = new Set<AgentId>(['claude', 'codex']);
+  const enabled = new Set<AgentId>(AGENT_IDS);
   let shareTranscripts = opts.shareTranscripts ?? true;
-  const transcriptRoots = opts.transcriptRoots ?? [join(homedir(), '.claude'), join(homedir(), '.codex')];
-  const names = new NameResolver(opts.nameSources ?? defaultNameSources());
+  const transcriptRoots = opts.transcriptRoots ?? [join(homedir(), '.claude'), join(homedir(), '.codex'), join(homedir(), '.cursor')];
+  const nameSources = opts.nameSources ?? defaultNameSources();
+  const names = new NameResolver(nameSources);
+  const cursorProjectsDir = opts.cursorProjectsDir ?? join(homedir(), '.cursor', 'projects');
+  const claudeProjectsDir = opts.claudeProjectsDir ?? join(homedir(), '.claude', 'projects');
+  let cwdCache: { at: number; map: Map<string, string> } | undefined;
   const nameChecked = new Map<string, number>();
   const viewers = new Map<string, Viewer>();
   const viewerListeners = new Set<(v: Viewer[]) => void>();
@@ -221,17 +239,93 @@ export function createMonitorServer(opts: ServerOptions): MonitorServer {
     store.setName(agent, id, await names.resolve(agent, id, transcript ?? undefined));
   }
 
+  /** Cursor runs Claude's hook command too, with a Cursor payload. That is the same chat, not a Claude session. */
+  function isCursorPayload(raw: unknown): boolean {
+    if (!raw || typeof raw !== 'object') return false;
+    const p = raw as Record<string, unknown>;
+    return typeof p.cursor_version === 'string' && typeof p.conversation_id === 'string';
+  }
+
+  async function cursorTranscript(id: string): Promise<string | null> {
+    const path = await findCursorTranscript(cursorProjectsDir, id);
+    return path && (await resolveTranscript(path, transcriptRoots));
+  }
+
+  async function claudeTranscript(id: string): Promise<string | null> {
+    const path = await findClaudeTranscript(claudeProjectsDir, id);
+    return path && (await resolveTranscript(path, transcriptRoots));
+  }
+
+  async function cwdFor(id: string): Promise<string | undefined> {
+    const now = Date.now();
+    if (!cwdCache || now - cwdCache.at > NAME_CHECK_MS) cwdCache = { at: now, map: await cursorCwds(nameSources.cursorChatsDir) };
+    return cwdCache.map.get(id);
+  }
+
+  /** Cursor often leaves transcript_path null. Pick up the jsonl by id, and chats the hooks never reported. */
+  async function syncCursorTranscripts(): Promise<void> {
+    if (!enabled.has('cursor')) return;
+    const found = await listRecentCursorTranscripts(cursorProjectsDir, Date.now() - RECENT_CURSOR_TRANSCRIPT_MS);
+    for (const item of found) {
+      const path = await resolveTranscript(item.path, transcriptRoots);
+      if (!path) continue;
+      const existing = store.snapshot().find((s) => s.agent === 'cursor' && s.id === item.id);
+      if (!existing) {
+        store.apply({
+          agent: 'cursor',
+          sessionId: item.id,
+          cwd: await cwdFor(item.id),
+          kind: 'session-start',
+          at: item.mtime,
+          transcriptPath: path,
+        });
+        void refreshName('cursor', item.id, true).catch(() => {});
+      } else if (!store.transcriptPath('cursor', item.id)) {
+        store.setTranscript('cursor', item.id, path);
+      }
+    }
+  }
+
+  /** Claude Code CLI and the desktop app share this tree. Hooks sometimes never hand over the file. */
+  async function syncClaudeTranscripts(): Promise<void> {
+    if (!enabled.has('claude')) return;
+    const found = await listRecentClaudeTranscripts(claudeProjectsDir, Date.now() - RECENT_CURSOR_TRANSCRIPT_MS);
+    for (const item of found) {
+      const path = await resolveTranscript(item.path, transcriptRoots);
+      if (!path) continue;
+      const existing = store.snapshot().find((s) => s.agent === 'claude' && s.id === item.id);
+      if (!existing) {
+        store.apply({
+          agent: 'claude',
+          sessionId: item.id,
+          cwd: await claudeCwd(path),
+          kind: 'session-start',
+          at: item.mtime,
+          transcriptPath: path,
+        });
+        void refreshName('claude', item.id, true).catch(() => {});
+      } else if (!store.transcriptPath('claude', item.id)) {
+        store.setTranscript('claude', item.id, path);
+      }
+    }
+  }
+
   async function handleEvent(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-    const agent = url.searchParams.get('agent') as AgentId | null;
-    if (agent !== 'claude' && agent !== 'codex') return send(res, 400, { error: 'unknown agent' });
+    const agent = url.searchParams.get('agent');
+    if (!isAgent(agent)) return send(res, 400, { error: 'unknown agent' });
     let raw: unknown;
     try {
       raw = JSON.parse(await readBody(req));
     } catch {
       return send(res, 400, { error: 'invalid json' });
     }
+    if (agent === 'claude' && isCursorPayload(raw)) return send(res, 204);
     if (enabled.has(agent)) {
-      const ev = normalize(agent, raw);
+      let ev = normalize(agent, raw);
+      if (ev && !ev.transcriptPath && (ev.agent === 'cursor' || ev.agent === 'claude')) {
+        const path = ev.agent === 'cursor' ? await cursorTranscript(ev.sessionId) : await claudeTranscript(ev.sessionId);
+        if (path) ev = { ...ev, transcriptPath: path };
+      }
       if (ev) {
         store.apply(ev);
         const milestone = ev.kind === 'session-start' || ev.kind === 'turn-end';
@@ -259,9 +353,16 @@ export function createMonitorServer(opts: ServerOptions): MonitorServer {
     if (!shareTranscripts) return send(res, 403, { error: 'disabled' });
     const agent = url.searchParams.get('agent');
     const id = url.searchParams.get('id');
-    if ((agent !== 'claude' && agent !== 'codex') || !id) return send(res, 400, { error: 'agent and id required' });
-    // The phone names a session; the file path only ever comes from the hook the agent itself sent.
-    const known = store.transcriptPath(agent, id);
+    if (!isAgent(agent) || !id) return send(res, 400, { error: 'agent and id required' });
+    // The phone names a session. The path comes from the hook, or from the agent's transcript directory when the hook left it out.
+    let known = store.transcriptPath(agent, id);
+    if (!known && (agent === 'cursor' || agent === 'claude')) {
+      const found = agent === 'cursor' ? await cursorTranscript(id) : await claudeTranscript(id);
+      if (found) {
+        store.setTranscript(agent, id, found);
+        known = found;
+      }
+    }
     const path = known && (await resolveTranscript(known, transcriptRoots));
     if (!path) return send(res, 404, { error: 'no transcript' });
     send(res, 200, await readTranscript(agent, path));
@@ -373,8 +474,16 @@ export function createMonitorServer(opts: ServerOptions): MonitorServer {
         front.once('error', reject);
         front.listen(opts.port, opts.host ?? '0.0.0.0', () => {
           front.off('error', reject);
-          tickTimer = setInterval(() => store.tick(), TICK_MS);
-          resolve();
+          void Promise.all([syncCursorTranscripts(), syncClaudeTranscripts()])
+            .catch(() => {})
+            .finally(() => {
+              tickTimer = setInterval(() => {
+                store.tick();
+                void syncCursorTranscripts().catch(() => {});
+                void syncClaudeTranscripts().catch(() => {});
+              }, TICK_MS);
+              resolve();
+            });
         });
       });
     },
@@ -393,7 +502,7 @@ export function createMonitorServer(opts: ServerOptions): MonitorServer {
     setEnabledAgents(agents) {
       enabled.clear();
       for (const a of agents) enabled.add(a);
-      for (const a of ['claude', 'codex'] as const) if (!enabled.has(a)) store.clearAgent(a);
+      for (const a of AGENT_IDS) if (!enabled.has(a)) store.clearAgent(a);
     },
     setShareTranscripts(value) {
       shareTranscripts = value;

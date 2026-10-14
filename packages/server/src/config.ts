@@ -29,7 +29,7 @@ export function defaultConfig(): Omit<Config, 'passwordHash'> {
   return {
     port: DEFAULT_PORT,
     token: randomBytes(9).toString('base64url'),
-    agents: { claude: { enabled: true }, codex: { enabled: true } },
+    agents: { claude: { enabled: true }, codex: { enabled: true }, cursor: { enabled: true } },
     launchAtLogin: false,
     shareTranscripts: true,
     sessionSecret: randomBytes(32).toString('base64url'),
@@ -52,6 +52,7 @@ export async function loadConfig(path: string = CONFIG_PATH): Promise<Config> {
     agents: {
       claude: { enabled: saved.agents?.claude?.enabled ?? true },
       codex: { enabled: saved.agents?.codex?.enabled ?? true },
+      cursor: { enabled: saved.agents?.cursor?.enabled ?? true },
     },
     launchAtLogin: saved.launchAtLogin ?? false,
     shareTranscripts: saved.shareTranscripts ?? true,

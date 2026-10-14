@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AGENT_IDS } from '@agent-monitor/protocol';
 import { createMonitorServer, lanAddresses, type MonitorServer } from './index.ts';
 
 /** The HTTP contract phones and hooks depend on: routing, static files, auth, limits and viewer tracking. */
@@ -149,7 +150,7 @@ test('setEnabledAgents drops the disabled agent’s sessions from the store and 
   assert.equal(await has(), true);
   server.setEnabledAgents(['claude']);
   assert.equal(await has(), false);
-  server.setEnabledAgents(['claude', 'codex']);
+  server.setEnabledAgents(AGENT_IDS);
 });
 
 test('stop() closes open streams so the port is really released', async () => {

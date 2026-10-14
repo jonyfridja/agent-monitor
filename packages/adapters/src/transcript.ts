@@ -126,7 +126,34 @@ function codexItems(d: Rec): TranscriptItem[] {
   }
 }
 
-/** Turn raw JSONL lines of a Claude Code / Codex transcript into display items (unparseable lines are skipped). */
+function textOf(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return (content as Rec[])
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
+    .join('\n');
+}
+
+/** Cursor agent transcripts: `{role, message.content[]}` plus `{type:'turn_ended'}` markers. Tool results are not stored. */
+function cursorItems(d: Rec): TranscriptItem[] {
+  if (d.type === 'turn_ended' || !d.message) return [];
+  const content = d.message.content;
+  if (d.role === 'user') {
+    const text = textOf(content);
+    return text.trim() && !INJECTED.test(text) ? [{ kind: 'user', text: clip(text, MAX.message) }] : [];
+  }
+  if (d.role !== 'assistant' || !Array.isArray(content)) return [];
+  const out: TranscriptItem[] = [];
+  for (const b of content as Rec[]) {
+    if (b.type === 'text' && b.text?.trim()) out.push({ kind: 'assistant', text: clip(b.text, MAX.message) });
+    else if (b.type === 'tool_use') out.push({ kind: 'tool', tool: String(b.name ?? 'tool'), text: summarizeToolInput(b.input) });
+    else if (b.type === 'tool_result') out.push({ kind: 'result', text: clip(outputText(b.content), MAX.result) });
+  }
+  return out;
+}
+
+/** Turn raw JSONL lines of a Claude Code, Codex, or Cursor transcript into display items (unparseable lines are skipped). */
 export function parseTranscript(agent: AgentId, lines: readonly string[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   for (const line of lines) {
@@ -137,7 +164,8 @@ export function parseTranscript(agent: AgentId, lines: readonly string[]): Trans
     } catch {
       continue; // partial first line of a tail read, or a corrupt record
     }
-    items.push(...(agent === 'claude' ? claudeItems(d) : codexItems(d)));
+    const parse = agent === 'claude' ? claudeItems : agent === 'codex' ? codexItems : cursorItems;
+    items.push(...parse(d));
   }
   return items;
 }

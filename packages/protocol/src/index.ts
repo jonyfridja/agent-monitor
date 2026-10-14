@@ -1,10 +1,11 @@
-export type AgentId = 'claude' | 'codex';
+export type AgentId = 'claude' | 'codex' | 'cursor';
 
-export const AGENT_IDS: readonly AgentId[] = ['claude', 'codex'];
+export const AGENT_IDS: readonly AgentId[] = ['claude', 'codex', 'cursor'];
 
 export const AGENT_LABELS: Record<AgentId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
+  cursor: 'Cursor',
 };
 
 export type Status = 'working' | 'waiting' | 'ended';

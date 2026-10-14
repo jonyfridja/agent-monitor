@@ -53,6 +53,18 @@ export class SessionStore {
     return this.#transcripts.get(`${agent}:${id}`);
   }
 
+  /** Remember a transcript file without changing status. Used when a hook omitted the path. */
+  setTranscript(agent: AgentId, id: string, path: string): void {
+    const key = `${agent}:${id}`;
+    const session = this.#sessions.get(key);
+    if (!session || this.#transcripts.get(key) === path) return;
+    this.#transcripts.set(key, path);
+    if (session.hasTranscript) return;
+    const next = { ...session, hasTranscript: true };
+    this.#sessions.set(key, next);
+    this.#emit({ type: 'session', now: Date.now(), session: next });
+  }
+
   notify(draft: NoticeDraft, session?: { agent: AgentId; id: string }): Notice {
     const notice: Notice = { id: randomUUID(), at: Date.now(), agent: session?.agent, sessionId: session?.id, ...draft };
     this.#emit({ type: 'notice', now: notice.at, notice });

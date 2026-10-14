@@ -1,13 +1,13 @@
 // `pnpm hooks` — see, add or remove agent-monitor's hooks in the agents' config files. Nothing else edits them.
 //   pnpm hooks                          status for every agent
-//   pnpm hooks install [claude|codex]   add our entries (all agents if none named); a one-time .agent-monitor.bak is made
-//   pnpm hooks uninstall [claude|codex] remove our entries, and only ours
+//   pnpm hooks install [claude|codex|cursor]   add our entries (all agents if none named); a one-time .agent-monitor.bak is made
+//   pnpm hooks uninstall [claude|codex|cursor] remove our entries, and only ours
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createAdapters, hookCommand } from '../packages/adapters/src/index.ts';
 
-const AGENTS = ['claude', 'codex'];
+const AGENTS = ['claude', 'codex', 'cursor'];
 const [action = 'status', ...names] = process.argv.slice(2);
 const DEFAULT_PORT = 47821;
 
@@ -21,7 +21,7 @@ function port() {
 }
 
 if (!['status', 'install', 'uninstall'].includes(action) || names.some((n) => !AGENTS.includes(n))) {
-  console.error('usage: pnpm hooks [status | install | uninstall] [claude | codex]');
+  console.error('usage: pnpm hooks [status | install | uninstall] [claude | codex | cursor]');
   process.exit(2);
 }
 

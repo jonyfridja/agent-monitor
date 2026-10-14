@@ -15,6 +15,7 @@ before(async () => {
     claudeSessionsDir: join(dir, 'sessions'),
     claudeDesktopDir: join(dir, 'desktop'),
     codexIndex: join(dir, 'session_index.jsonl'),
+    cursorChatsDir: join(dir, 'cursor-chats'),
   };
   await mkdir(src.claudeSessionsDir);
   await mkdir(join(src.claudeDesktopDir!, 'acct', 'ws'), { recursive: true });
@@ -34,6 +35,12 @@ before(async () => {
   const filler = JSON.stringify({ type: 'user', message: { role: 'user', content: 'x'.repeat(1000) } });
   await write(join(dir, 'long.jsonl'), [JSON.stringify({ type: 'custom-title', customTitle: 'Original title' }), ...Array(700).fill(filler)].join('\n')); // ~700 KB: past the 512 KB tail
   await write(join(dir, 'ai.jsonl'), [{ type: 'user' }, { type: 'ai-title', aiTitle: 'Only  auto\ntitle' }].map((o) => JSON.stringify(o)).join('\n'));
+
+  await mkdir(join(src.cursorChatsDir, 'ws', 'conv-1'), { recursive: true });
+  await write(join(src.cursorChatsDir, 'ws', 'conv-1', 'meta.json'), { title: 'Cursor Chat', cwd: '/w/p' });
+  await mkdir(join(src.cursorChatsDir, 'ws', 'blank'), { recursive: true });
+  await write(join(src.cursorChatsDir, 'ws', 'blank', 'meta.json'), { title: '   ' });
+  await write(join(src.cursorChatsDir, 'ws', 'not-a-chat.txt'), 'skip');
 
   await write(src.codexIndex, [
     { id: 'x1', thread_name: 'First name', updated_at: 'a' },
@@ -72,9 +79,16 @@ test('claude: auto-generated (derived) names are not used; falls back to the tra
 
 test('claude: unknown session or missing sources resolve to undefined, never throw', async () => {
   assert.equal(await new NameResolver(src, 0).resolve('claude', 'nope'), undefined);
-  const missing = new NameResolver({ claudeSessionsDir: join(dir, 'gone'), codexIndex: join(dir, 'gone.jsonl') }, 0);
+  const missing = new NameResolver({ claudeSessionsDir: join(dir, 'gone'), codexIndex: join(dir, 'gone.jsonl'), cursorChatsDir: join(dir, 'gone-chats') }, 0);
   assert.equal(await missing.resolve('claude', 'x', join(dir, 'gone.jsonl')), undefined);
   assert.equal(await missing.resolve('codex', 'x'), undefined);
+});
+
+test('cursor: title from ~/.cursor/chats/<workspace>/<id>/meta.json; blank titles ignored', async () => {
+  const r = new NameResolver(src, 0);
+  assert.equal(await r.resolve('cursor', 'conv-1'), 'Cursor Chat');
+  assert.equal(await r.resolve('cursor', 'blank'), undefined);
+  assert.equal(await r.resolve('cursor', 'missing'), undefined);
 });
 
 test('codex: thread_name from the index; the latest line wins; blank names ignored', async () => {

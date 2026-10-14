@@ -9,8 +9,14 @@ import {
   key,
   mergePrefs,
   parseUnread,
+  pruneArchived,
   pruneUnread,
   shouldMarkUnread,
+  filterSessions,
+  listFromSearch,
+  listQuery,
+  listSearch,
+  sortDirLabel,
   sortSessions,
   splitUnread,
   summarize,
@@ -98,6 +104,50 @@ test('sortSessions: most urgent first, then longest-waiting; does not mutate its
   const snapshot = input.map((s) => s.id);
   assert.deepEqual(sortSessions(input).map((s) => s.id), ['approval', 'early-turn', 'late-turn', 'w']);
   assert.deepEqual(input.map((s) => s.id), snapshot);
+});
+
+test('listQuery: keeps known choices and drops garbage', () => {
+  const base = { by: 'status', reverse: false, agent: '', status: '', archived: false };
+  assert.deepEqual(listQuery(null), base);
+  assert.deepEqual(listQuery({ by: 'nope', agent: 'vim', status: 'asleep', reverse: 'yes', archived: 'yes' }), base);
+  assert.deepEqual(listQuery({ by: 'active', reverse: true, agent: 'cursor', status: 'idle', archived: true }), { by: 'active', reverse: true, agent: 'cursor', status: 'idle', archived: true });
+});
+
+test('list URL: defaults stay clean, choices round-trip, a pairing token is not a filter', () => {
+  const chosen = { by: 'name', reverse: true, agent: 'cursor', status: 'idle', archived: true };
+  assert.equal(listSearch(listQuery(null)), '');
+  assert.equal(listSearch(chosen), '?sort=name&rev=1&agent=cursor&status=idle&archived=1');
+  assert.deepEqual(listFromSearch(listSearch(chosen)), chosen);
+  assert.equal(listFromSearch(''), null);
+  assert.equal(listFromSearch('?t=pair-token'), null);
+  assert.deepEqual(listFromSearch('?sort=nope&agent=vim&status=asleep&rev=0'), { by: 'status', reverse: false, agent: '', status: '', archived: false });
+});
+
+test('sort and filter: name, created, recently active, agent, and status', () => {
+  const rows = [
+    session({ id: 'b', agent: 'cursor', name: 'Bravo', project: 'z', startedAt: 20, lastEventAt: 50, stateSince: 50, reason: 'idle' }),
+    session({ id: 'a', agent: 'claude', name: 'alpha', project: 'a', startedAt: 30, lastEventAt: 10, stateSince: 10 }),
+    session({ id: 'c', agent: 'codex', project: 'Charlie', startedAt: 10, lastEventAt: 40, stateSince: 40, status: 'working', reason: undefined }),
+    session({ id: 'd', agent: 'claude', project: 'delta', startedAt: 5, lastEventAt: 5, stateSince: 5, reason: 'stale' }),
+  ];
+  assert.deepEqual(sortSessions(rows, 'name').map((s) => s.id), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(sortSessions(rows, 'name', true).map((s) => s.id), ['d', 'c', 'b', 'a']);
+  assert.deepEqual(sortSessions(rows, 'created').map((s) => s.id), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(sortSessions(rows, 'created', true).map((s) => s.id), ['d', 'c', 'b', 'a']);
+  assert.deepEqual(sortSessions(rows, 'active').map((s) => s.id), ['b', 'c', 'a', 'd']);
+  assert.equal(sortDirLabel('status', false), 'Urgent first');
+  assert.equal(sortDirLabel('active', true), 'Earliest');
+  assert.deepEqual(filterSessions(rows, { agent: 'claude' }).map((s) => s.id), ['a', 'd']);
+  assert.deepEqual(filterSessions(rows, { status: 'idle' }).map((s) => s.id), ['b', 'd']);
+  assert.deepEqual(filterSessions(rows, { agent: 'cursor', status: 'working' }).map((s) => s.id), []);
+  const archivedKeys = new Set(['cursor:b', 'claude:gone']);
+  assert.deepEqual(filterSessions(rows, { archivedKeys }).map((s) => s.id), ['a', 'c', 'd']);
+  assert.deepEqual(filterSessions(rows, { archived: true, archivedKeys }).map((s) => s.id), ['b']);
+  assert.deepEqual(filterSessions(rows, { archived: true, agent: 'claude', archivedKeys }).map((s) => s.id), []);
+  const kept = new Set(['cursor:b', 'claude:gone']);
+  assert.equal(pruneArchived(kept, map(session({ id: 'b', agent: 'cursor' }))), true);
+  assert.deepEqual([...kept], ['cursor:b']);
+  assert.deepEqual(sortSessions(rows).map((s) => s.id), sortSessions(rows, 'status', false).map((s) => s.id));
 });
 
 test('splitUnread: partitions by key, preserving order', () => {

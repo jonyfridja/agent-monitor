@@ -1,6 +1,6 @@
 // Phone client: renders sessions from the host's SSE stream and raises in-page alerts.
 // Decisions (status views, unread rules, alert plans) live in core.js and are unit-tested; this file does DOM + storage.
-import { alertPlan, ago, findSession, keepAwakeStatus, key, mergePrefs, parseUnread, pruneUnread as prune, shouldMarkUnread, sortSessions, splitUnread, summarize, view } from './core.js';
+import { alertPlan, ago, filterSessions, findSession, keepAwakeStatus, key, LIST_AGENTS, LIST_ARCHIVES, LIST_SORTS, LIST_STATUSES, listFromSearch, listQuery, listSearch, mergePrefs, parseUnread, pruneArchived, pruneUnread as prune, shouldMarkUnread, sortDirLabel, sortSessions, splitUnread, summarize, view } from './core.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -40,7 +40,7 @@ const onSchemeChange = () => prefs.theme === 'system' && applyTheme();
 if (scheme) scheme.addEventListener ? scheme.addEventListener('change', onSchemeChange) : scheme.addListener?.(onSchemeChange);
 applyTheme();
 
-const AGENT = { claude: 'Claude Code', codex: 'Codex' };
+const AGENT = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
 const sessions = new Map(); // "agent:id" -> Session
 let skew = 0; // serverNow - localNow
 const serverNow = () => Date.now() + skew;
@@ -48,6 +48,28 @@ const serverNow = () => Date.now() + skew;
 // ---- unread: sessions that raised an alert you haven't looked at yet (kept on this phone) ----
 // A session is unread from the moment it alerts until you open/tap it, or until the agent moves on (no longer waiting).
 const unread = new Set(loadUnread());
+const archived = new Set(loadArchived());
+function loadArchived() {
+  try {
+    return parseUnread(localStorage.getItem('am.archived'));
+  } catch {
+    return [];
+  }
+}
+function saveArchived() {
+  try {
+    localStorage.setItem('am.archived', JSON.stringify([...archived]));
+  } catch {}
+}
+function toggleArchive(k) {
+  if (archived.has(k)) archived.delete(k);
+  else {
+    archived.add(k);
+    if (unread.delete(k)) saveUnread();
+  }
+  saveArchived();
+  render();
+}
 let haveSnapshot = false; // don't prune stored unread state before we know which sessions exist
 function loadUnread() {
   try {
@@ -70,6 +92,9 @@ function markRead(k) {
 function pruneUnread() {
   if (haveSnapshot && prune(unread, sessions)) saveUnread();
 }
+function pruneArchive() {
+  if (haveSnapshot && pruneArchived(archived, sessions)) saveArchived();
+}
 
 // ---- rendering ----
 function card(s) {
@@ -81,11 +106,20 @@ function card(s) {
   el.innerHTML = `
     <div class="row"><span class="agent"></span><span class="meta">${isUnread ? '<span class="new">New</span>' : ''}<span class="time" data-since="${s.stateSince}"></span></span></div>
     <div class="project"></div>
-    <div class="pill"></div>`;
+    <div class="foot"><div class="pill"></div></div>`;
   // Title = the harness's own name for the session; the folder moves to the small label when we have one.
   el.querySelector('.agent').textContent = (AGENT[s.agent] ?? s.agent) + (s.name ? ` · ${s.project}` : '');
   el.querySelector('.project').textContent = s.name || s.project;
   el.querySelector('.pill').textContent = v.label;
+  const archiveBtn = document.createElement('button');
+  archiveBtn.type = 'button';
+  archiveBtn.className = 'archive';
+  archiveBtn.textContent = archived.has(k) ? 'Unarchive' : 'Archive';
+  archiveBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleArchive(k);
+  });
+  el.querySelector('.foot').append(archiveBtn);
   if (s.hasTranscript || isUnread) {
     el.addEventListener('click', () => {
       markRead(k);
@@ -118,7 +152,10 @@ function section(title, count, cls, action) {
 
 function render() {
   pruneUnread();
-  const list = sortSessions(sessions.values());
+  pruneArchive();
+  const all = [...sessions.values()];
+  const active = all.filter((s) => !archived.has(key(s.agent, s.id)));
+  const list = sortSessions(filterSessions(all, { ...listQ, archivedKeys: archived }), listQ.by, listQ.reverse);
   const { fresh, rest } = splitUnread(list, unread);
   const wrap = (items) => {
     const g = document.createElement('div');
@@ -144,8 +181,18 @@ function render() {
     nodes.push(wrap(rest)); // nothing unread: a plain list, no headings
   }
   $('list').replaceChildren(...nodes);
-  $('empty').hidden = list.length > 0;
-  const summary = summarize(list, fresh.length);
+  const onList = !current;
+  $('filter-btn').hidden = !onList || all.length === 0;
+  $('filter-btn').classList.toggle('on', !!(listQ.agent || listQ.status || listQ.archived || listQ.reverse || listQ.by !== 'status'));
+  if ($('filter-btn').hidden) closeFilters();
+  $('empty').hidden = !onList || all.length > 0;
+  $('nomatch').hidden = !onList || all.length === 0 || list.length > 0;
+  $('nomatch').textContent = listQ.archived
+    ? 'No archived chats.'
+    : active.length === 0
+      ? 'No active chats. Archived ones are in the filter menu.'
+      : 'No sessions match these filters.';
+  const summary = summarize(active, splitUnread(active, unread).fresh.length);
   $('summary').textContent = summary.text;
   document.title = summary.title;
   if (current) renderDetailHead();
@@ -312,15 +359,37 @@ function syncMenu() {
       : 'Tap anywhere once to allow sound (browsers require it after each page load).';
 }
 
+function closeFilters() {
+  $('filters').hidden = true;
+  $('filter-btn').setAttribute('aria-expanded', 'false');
+  if ($('menu').hidden) $('scrim').hidden = true;
+}
+function closePanels() {
+  $('menu').hidden = true;
+  $('gear').setAttribute('aria-expanded', 'false');
+  closeFilters();
+}
 function setMenu(open) {
-  $('menu').hidden = !open;
-  $('scrim').hidden = !open;
-  $('gear').setAttribute('aria-expanded', String(open));
-  if (open) syncMenu();
+  if (!open) return closePanels();
+  $('filters').hidden = true;
+  $('filter-btn').setAttribute('aria-expanded', 'false');
+  $('menu').hidden = false;
+  $('scrim').hidden = false;
+  $('gear').setAttribute('aria-expanded', 'true');
+  syncMenu();
+}
+function setFiltersOpen(open) {
+  if (!open) return closePanels();
+  $('menu').hidden = true;
+  $('gear').setAttribute('aria-expanded', 'false');
+  $('filters').hidden = false;
+  $('scrim').hidden = false;
+  $('filter-btn').setAttribute('aria-expanded', 'true');
 }
 $('gear').addEventListener('click', () => setMenu($('menu').hidden));
-$('scrim').addEventListener('click', () => setMenu(false));
-addEventListener('keydown', (e) => e.key === 'Escape' && setMenu(false));
+$('filter-btn').addEventListener('click', () => setFiltersOpen($('filters').hidden));
+$('scrim').addEventListener('click', closePanels);
+addEventListener('keydown', (e) => e.key === 'Escape' && closePanels());
 
 $('menu').addEventListener('change', (e) => {
   const el = e.target;
@@ -384,9 +453,21 @@ function showLogin(mode) {
   }[mode];
   clearTimeout(setupTimer);
   if (mode === 'setup') setupTimer = setTimeout(() => void checkAuth(), 3000); // wait for the Mac
-  for (const id of ['password', 'login-btn']) $(id).hidden = !pw;
-  if (pw) $('password').focus();
+  for (const id of ['password-row', 'login-btn']) $(id).hidden = !pw;
+  if (pw) {
+    setPasswordVisible(false);
+    $('password').focus();
+  }
 }
+function setPasswordVisible(show) {
+  $('password').type = show ? 'text' : 'password';
+  $('pw-toggle').setAttribute('aria-pressed', String(show));
+  $('pw-toggle').setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+  $('eye').hidden = show;
+  $('eye-off').hidden = !show;
+}
+$('pw-toggle').addEventListener('mousedown', (e) => e.preventDefault()); // keep the caret in the field
+$('pw-toggle').addEventListener('click', () => setPasswordVisible($('password').type === 'password'));
 function hideLogin() {
   document.body.classList.remove('locked');
   $('login').hidden = true;
@@ -455,12 +536,15 @@ function renderDetailHead() {
   if (!s) {
     $('d-meta').textContent = AGENT[current.agent] ?? current.agent;
     $('d-pill').textContent = '';
+    $('archive').hidden = true;
     return;
   }
   const v = view(s);
   $('d-meta').textContent = `${AGENT[s.agent] ?? s.agent} · ${s.cwd}`;
   $('d-pill').textContent = `${v.label} · ${ago(serverNow() - s.stateSince)}`;
   $('d-pill').style.setProperty('--c', `var(--${{ working: 'working', approval: 'approval', turn: 'turn' }[v.cls] ?? 'idle'})`);
+  $('archive').hidden = false;
+  $('archive').textContent = archived.has(key(current.agent, current.id)) ? 'Unarchive' : 'Archive';
 }
 
 function noteTerm(text) {
@@ -521,7 +605,7 @@ async function pollTranscript(first) {
 }
 
 function route() {
-  const m = /^#\/(claude|codex)\/(.+)$/.exec(location.hash);
+  const m = /^#\/(claude|codex|cursor)\/(.+)$/.exec(location.hash);
   clearInterval(pollTimer);
   if (!m) {
     current = null;
@@ -535,7 +619,8 @@ function route() {
   lastSig = '';
   $('term').replaceChildren();
   noteTerm('Loading…');
-  for (const id of ['list', 'empty']) $(id).hidden = true;
+  closePanels();
+  for (const id of ['list', 'empty', 'filter-btn', 'nomatch']) $(id).hidden = true;
   $('detail').hidden = false;
   renderDetailHead();
   scrollTo(0, 0);
@@ -543,11 +628,77 @@ function route() {
   pollTimer = setInterval(() => pollTranscript(false), 1500);
 }
 
+$('archive').addEventListener('click', () => current && toggleArchive(key(current.agent, current.id)));
 $('back').addEventListener('click', () => {
   if (cameFromList) history.back();
   else location.hash = '';
   cameFromList = false;
 });
+function fillSelect(id, options, allLabel) {
+  const el = $(id);
+  const nodes = options.map((o) => new Option(o.label, o.id));
+  el.replaceChildren(...(allLabel ? [new Option(allLabel, '')] : []), ...nodes);
+}
+function storedList() {
+  try {
+    return listQuery(JSON.parse(localStorage.getItem('am.list') || 'null'));
+  } catch {
+    return listQuery(null);
+  }
+}
+function rememberList() {
+  try {
+    localStorage.setItem('am.list', JSON.stringify(listQ));
+  } catch {}
+}
+/** The URL is the shareable copy. A phone with no query string still starts from its saved choice, then the URL catches up. */
+function writeListUrl(push) {
+  const next = location.pathname + listSearch(listQ) + location.hash;
+  const now = location.pathname + location.search + location.hash;
+  if (next !== now) history[push ? 'pushState' : 'replaceState'](null, '', next);
+}
+let listQ = listFromSearch(location.search) ?? storedList();
+function syncListControls() {
+  $('sort').value = listQ.by;
+  $('filter-agent').value = listQ.agent;
+  $('filter-status').value = listQ.status;
+  $('filter-archive').value = listQ.archived ? 'archived' : '';
+  $('sort-dir').textContent = sortDirLabel(listQ.by, listQ.reverse);
+  $('sort-dir').setAttribute('aria-pressed', String(listQ.reverse));
+  $('sort-dir').setAttribute('aria-label', `Sort direction: ${$('sort-dir').textContent}`);
+}
+function setList(next) {
+  listQ = listQuery({ ...listQ, ...next });
+  rememberList();
+  writeListUrl(true);
+  syncListControls();
+  render();
+}
+fillSelect('sort', LIST_SORTS);
+fillSelect('filter-agent', LIST_AGENTS, 'All agents');
+fillSelect('filter-status', LIST_STATUSES, 'All statuses');
+fillSelect('filter-archive', LIST_ARCHIVES);
+rememberList();
+writeListUrl(false);
+syncListControls();
+$('sort').addEventListener('change', () => setList({ by: $('sort').value }));
+$('sort-dir').addEventListener('click', () => setList({ reverse: !listQ.reverse }));
+for (const id of ['filter-agent', 'filter-status', 'filter-archive']) {
+  $(id).addEventListener('change', () =>
+    setList({
+      agent: $('filter-agent').value,
+      status: $('filter-status').value,
+      archived: $('filter-archive').value === 'archived',
+    }),
+  );
+}
+addEventListener('popstate', () => {
+  listQ = listFromSearch(location.search) ?? listQuery(null);
+  rememberList();
+  syncListControls();
+  if (!current) render();
+});
+
 addEventListener('hashchange', route);
 document.addEventListener('visibilitychange', () => !document.hidden && current && pollTranscript(false));
 route();

@@ -55,6 +55,22 @@ test('codex: user_message, assistant message, tool call + output; developer/reas
   ]);
 });
 
+test('cursor: user text, assistant text, and tool calls; turn markers skipped', () => {
+  const items = parseTranscript('cursor', [
+    j({ role: 'user', message: { content: [{ type: 'text', text: 'add cursor support' }] } }),
+    j({ role: 'assistant', message: { content: [{ type: 'text', text: 'Looking.' }, { type: 'tool_use', name: 'Shell', input: { command: 'pnpm test' } }] } }),
+    j({ type: 'turn_ended', status: 'success' }),
+    j({ role: 'assistant', message: { content: [{ type: 'tool_result', content: 'ok' }] } }),
+    'not json',
+  ]);
+  assert.deepEqual(items, [
+    { kind: 'user', text: 'add cursor support' },
+    { kind: 'assistant', text: 'Looking.' },
+    { kind: 'tool', tool: 'Shell', text: 'pnpm test' },
+    { kind: 'result', text: 'ok' },
+  ]);
+});
+
 test('long text is truncated and tool summaries take the first line only', () => {
   const [u] = parseTranscript('claude', [j({ type: 'user', message: { role: 'user', content: 'x'.repeat(9000) } })]);
   assert.equal(u.text.length, 4001);

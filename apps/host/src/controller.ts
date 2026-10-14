@@ -46,7 +46,7 @@ export interface HostState {
 export interface ControllerOptions {
   webDir: string;
   configPath?: string;
-  /** Home dir holding `.claude` / `.codex`; overridable for tests. */
+  /** Home dir holding `.claude` / `.codex` / `.cursor`; overridable for tests. */
   home?: string;
   /** Overrides the saved port (tests). */
   port?: number;
@@ -62,6 +62,7 @@ export class Controller extends EventEmitter {
   #hooks: Record<AgentId, Pick<AgentState, 'hook' | 'error'>> = {
     claude: { hook: 'not-installed' },
     codex: { hook: 'not-installed' },
+    cursor: { hook: 'not-installed' },
   };
   #error?: string;
   #pending?: NodeJS.Timeout;
@@ -100,7 +101,9 @@ export class Controller extends EventEmitter {
       webDir: this.#opts.webDir,
       shareTranscripts: this.#config.shareTranscripts,
       nameSources: this.#opts.home ? defaultNameSources(this.#opts.home) : undefined,
-      transcriptRoots: this.#opts.home ? [join(this.#opts.home, '.claude'), join(this.#opts.home, '.codex')] : undefined,
+      transcriptRoots: this.#opts.home
+        ? [join(this.#opts.home, '.claude'), join(this.#opts.home, '.codex'), join(this.#opts.home, '.cursor')]
+        : undefined,
     });
     server.setEnabledAgents(AGENT_IDS.filter((a) => this.#config.agents[a].enabled));
     try {

@@ -18,7 +18,7 @@ test('first run: defaults, a generated pairing token, and the file is written fo
   const c = await loadConfig(path);
   assert.equal(c.port, DEFAULT_PORT);
   assert.ok(c.token.length >= 10, 'token is long enough to be a secret');
-  assert.deepEqual(c.agents, { claude: { enabled: true }, codex: { enabled: true } });
+  assert.deepEqual(c.agents, { claude: { enabled: true }, codex: { enabled: true }, cursor: { enabled: true } });
   assert.equal(c.shareTranscripts, true);
   assert.equal((await loadConfig(path)).token, c.token, 'the token is stable across launches');
 });
@@ -37,6 +37,7 @@ test('an old config missing newer fields loads with defaults and keeps the userâ
   assert.equal(c.token, 'keep-me');
   assert.equal(c.agents.claude.enabled, false, 'an explicit choice survives');
   assert.equal(c.agents.codex.enabled, true, 'a missing agent defaults to on');
+  assert.equal(c.agents.cursor.enabled, true, 'a missing agent defaults to on');
   assert.equal(c.shareTranscripts, true);
   assert.equal(c.launchAtLogin, false);
   assert.equal(await verifyPassword('123456', c.passwordHash), true, 'the default password until the user changes it');
@@ -55,7 +56,7 @@ test('save â†’ load round-trips every field', async () => {
     port: 6000,
     launchAtLogin: true,
     shareTranscripts: false,
-    agents: { claude: { enabled: false }, codex: { enabled: true } },
+    agents: { claude: { enabled: false }, codex: { enabled: true }, cursor: { enabled: false } },
     passwordHash: 'scrypt$1$2$3$salt$hash',
     tls: { enabled: true, cert: '/c.pem', key: '/k.pem' },
   };

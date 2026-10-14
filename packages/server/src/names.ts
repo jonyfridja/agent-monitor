@@ -11,6 +11,8 @@ export interface NameSources {
   claudeDesktopDir?: string;
   /** `~/.codex/session_index.jsonl` — `{id, thread_name}` per line, later lines win. */
   codexIndex: string;
+  /** `~/.cursor/chats/<workspace>/<conversation>/meta.json` — `{title}`. The conversation directory name is the id. */
+  cursorChatsDir: string;
 }
 
 export function defaultNameSources(home: string = homedir()): NameSources {
@@ -19,6 +21,7 @@ export function defaultNameSources(home: string = homedir()): NameSources {
     claudeDesktopDir:
       process.platform === 'darwin' ? join(home, 'Library', 'Application Support', 'Claude', 'claude-code-sessions') : undefined,
     codexIndex: join(home, '.codex', 'session_index.jsonl'),
+    cursorChatsDir: join(home, '.cursor', 'chats'),
   };
 }
 
@@ -109,7 +112,28 @@ export class NameResolver {
   }
 
   async resolve(agent: AgentId, sessionId: string, transcriptPath?: string): Promise<string | undefined> {
-    return agent === 'codex' ? this.#codex(sessionId) : this.#claude(sessionId, transcriptPath);
+    if (agent === 'codex') return this.#codex(sessionId);
+    if (agent === 'cursor') return this.#cursor(sessionId);
+    return this.#claude(sessionId, transcriptPath);
+  }
+
+  async #cursor(id: string): Promise<string | undefined> {
+    const names = await this.#index('cursor', async () => {
+      const map = new Map<string, string>();
+      const root = this.#src.cursorChatsDir;
+      for (const bucket of await readdir(root, { withFileTypes: true })) {
+        if (!bucket.isDirectory()) continue;
+        const bucketPath = join(root, bucket.name);
+        for (const convo of await readdir(bucketPath, { withFileTypes: true })) {
+          if (!convo.isDirectory()) continue;
+          const meta = await readJson(join(bucketPath, convo.name, 'meta.json'));
+          const title = clean(meta?.title);
+          if (title) map.set(convo.name, title);
+        }
+      }
+      return map;
+    });
+    return names.get(id);
   }
 
   async #codex(id: string): Promise<string | undefined> {

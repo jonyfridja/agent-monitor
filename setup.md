@@ -31,13 +31,13 @@ The window opens to a setup screen, and phones can't connect until you set a pas
 
 ### 3. Connect your agents
 
-The next screen has an **Install hooks** button for each agent (Claude Code, Codex). Click the ones you use. Nothing is written to their config until you click, and a backup of each file is made first.
+The next screen has an **Install hooks** button for each agent (Claude Code, Codex, Cursor). Click the ones you use. Nothing is written to their config until you click, and a backup of each file is made first.
 
 You can skip this step and do it later from the window, or from the terminal with `pnpm hooks install`.
 
 ### 4. Restart running agent sessions
 
-Agents read hooks only when a session starts, so restart any Claude Code or Codex sessions that were already open.
+Claude Code and Codex read hooks only when a session starts, so restart any sessions that were already open. Cursor reloads `~/.cursor/hooks.json` on its own; send a new message in an open chat.
 
 ### 5. Connect the phone
 
@@ -97,7 +97,7 @@ If you use the packaged app instead, rebuild it with `pnpm package`, replace the
 pnpm hooks
 ```
 
-- Both `installed`: nothing to do.
+- Every agent you use shows `installed`: nothing to do.
 - `wrong-port` (you changed the port), or the release notes say the hook command changed: run `pnpm hooks install`, then restart running agent sessions. Reinstalling replaces agent-monitor's own entries and leaves yours alone.
 
 ### Updating from a version without a password

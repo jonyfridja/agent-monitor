@@ -3,15 +3,28 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AgentId } from '@agent-monitor/protocol';
 import {
+  addCursorHooks,
   addOurHooks,
   hookCommand,
+  installedCursorPorts,
   installedPorts,
+  removeCursorHooks,
   removeOurHooks,
+  type CursorHookFile,
   type HookFile,
 } from './hookConfig.ts';
 
 export { normalize } from './normalize.ts';
-export { MARKER, hookCommand, addOurHooks, removeOurHooks, installedPorts } from './hookConfig.ts';
+export {
+  MARKER,
+  hookCommand,
+  addOurHooks,
+  removeOurHooks,
+  installedPorts,
+  addCursorHooks,
+  removeCursorHooks,
+  installedCursorPorts,
+} from './hookConfig.ts';
 
 export type InstallState = 'installed' | 'not-installed' | 'wrong-port';
 
@@ -34,11 +47,17 @@ const COMMON_EVENTS = [
   'SessionEnd',
 ] as const;
 
-async function readJson(path: string): Promise<HookFile> {
+/**
+ * Observational Cursor events only. `preToolUse`, `beforeShellExecution`, `beforeReadFile`, and
+ * `subagentStart` are permission hooks: exit 0 with no JSON blocks the tool.
+ */
+const CURSOR_EVENTS = ['sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'postToolUseFailure', 'stop', 'sessionEnd'] as const;
+
+async function readJson<T>(path: string): Promise<T> {
   try {
-    return JSON.parse(await readFile(path, 'utf8')) as HookFile;
+    return JSON.parse(await readFile(path, 'utf8')) as T;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {} as T;
     throw err; // unreadable/invalid JSON: refuse to overwrite the user's config
   }
 }
@@ -50,7 +69,7 @@ async function exists(path: string): Promise<boolean> {
   );
 }
 
-async function writeJsonAtomic(path: string, data: HookFile): Promise<void> {
+async function writeJsonAtomic(path: string, data: object): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const backup = `${path}.agent-monitor.bak`;
   if ((await exists(path)) && !(await exists(backup))) await copyFile(path, backup);
@@ -65,15 +84,36 @@ function makeAdapter(id: AgentId, configPath: string, events: readonly string[])
     configPath,
     events,
     async install(port) {
-      const file = await readJson(configPath);
+      const file = await readJson<HookFile>(configPath);
       await writeJsonAtomic(configPath, addOurHooks(file, events, hookCommand(id, port)));
     },
     async uninstall() {
       if (!(await exists(configPath))) return;
-      await writeJsonAtomic(configPath, removeOurHooks(await readJson(configPath)));
+      await writeJsonAtomic(configPath, removeOurHooks(await readJson<HookFile>(configPath)));
     },
     async state(port) {
-      const ports = installedPorts(await readJson(configPath), events);
+      const ports = installedPorts(await readJson<HookFile>(configPath), events);
+      if (ports.every((p) => p === null)) return 'not-installed';
+      return ports.every((p) => p === port) ? 'installed' : 'wrong-port';
+    },
+  };
+}
+
+function makeCursorAdapter(configPath: string): AgentAdapter {
+  return {
+    id: 'cursor',
+    configPath,
+    events: CURSOR_EVENTS,
+    async install(port) {
+      const file = await readJson<CursorHookFile>(configPath);
+      await writeJsonAtomic(configPath, addCursorHooks(file, CURSOR_EVENTS, hookCommand('cursor', port)));
+    },
+    async uninstall() {
+      if (!(await exists(configPath))) return;
+      await writeJsonAtomic(configPath, removeCursorHooks(await readJson<CursorHookFile>(configPath)));
+    },
+    async state(port) {
+      const ports = installedCursorPorts(await readJson<CursorHookFile>(configPath), CURSOR_EVENTS);
       if (ports.every((p) => p === null)) return 'not-installed';
       return ports.every((p) => p === port) ? 'installed' : 'wrong-port';
     },
@@ -84,6 +124,7 @@ export function createAdapters(home: string = homedir()): Record<AgentId, AgentA
   return {
     claude: makeAdapter('claude', join(home, '.claude', 'settings.json'), [...COMMON_EVENTS, 'Notification']),
     codex: makeAdapter('codex', join(home, '.codex', 'hooks.json'), COMMON_EVENTS),
+    cursor: makeCursorAdapter(join(home, '.cursor', 'hooks.json')),
   };
 }
 export { parseTranscript, summarizeToolInput } from './transcript.ts';

@@ -1,6 +1,6 @@
 // Settings window. All data comes from the main process via the `am` bridge (see preload.ts).
 const $ = (id) => document.getElementById(id);
-const LABELS = { claude: 'Claude Code', codex: 'Codex' };
+const LABELS = { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' };
 const COLORS = { working: 'var(--working)', approval: 'var(--approval)', turn: 'var(--turn)' };
 
 function el(tag, props = {}, ...kids) {

@@ -1,6 +1,6 @@
 # agent-monitor
 
-A tiny second screen for your coding agents. A menu-bar app on your Mac runs a small local server. An old phone, or any browser on your Wi-Fi, then shows which agents are **working** and which are **waiting for you**. It is local-only and nothing leaves your network. Password-protected and served over HTTPS. Supports **Claude Code** and **Codex**.
+A tiny second screen for your coding agents. A menu-bar app on your Mac runs a small local server. An old phone, or any browser on your Wi-Fi, then shows which agents are **working** and which are **waiting for you**. It is local-only and nothing leaves your network. Password-protected and served over HTTPS. Supports **Claude Code**, **Codex**, and **Cursor**.
 
 - **[First Time Install](setup.md#first-time-install)**: install, choose a password, connect your agents and your phone.
 - **[Updating](setup.md#updating)**: get a new version while keeping your settings, password and hooks.
@@ -10,9 +10,9 @@ A tiny second screen for your coding agents. A menu-bar app on your Mac runs a s
 <sub>A real, unedited recording (41 s): Claude Code asks for permission, so the phone card turns red; once approved and finished, it turns green ("your turn"), and the phone opens the live transcript. [Watch the MP4](docs/demo.mp4).</sub>
 
 ```
-Claude Code ─┐ hook (curl, 1s cap, never blocks)
-Codex        ─┴─► POST 127.0.0.1:47821/api/events ─► server ─► HTTPS + SSE (password login) ─► phone browser
-                                                        └── tray app (Electron): sessions, phones, password, hooks
+Claude Code ─┐
+Codex        ─┼─ hook (curl, 1s cap, never blocks) ─► POST 127.0.0.1:47821/api/events ─► server ─► HTTPS + SSE (password login) ─► phone browser
+Cursor       ─┘                                                                              └── tray app (Electron): sessions, phones, password, hooks
 ```
 
 ## Commands
@@ -21,8 +21,8 @@ Codex        ─┴─► POST 127.0.0.1:47821/api/events ─► server ─► H
 |---|---|
 | `pnpm host` | Build and start the menu-bar app, detached from the terminal. Output goes to `~/.agent-monitor/host.log`. Running it again opens the window of the instance that's already running. Add `--foreground` to keep it attached (for development). |
 | `pnpm hooks` | Show whether agent-monitor's hooks are in each agent's config. |
-| `pnpm hooks install [claude\|codex]` | Add the hooks (to both agents if you don't name one). |
-| `pnpm hooks uninstall [claude\|codex]` | Remove the hooks, and only agent-monitor's. |
+| `pnpm hooks install [claude\|codex\|cursor]` | Add the hooks (to every agent if you don't name one). |
+| `pnpm hooks uninstall [claude\|codex\|cursor]` | Remove the hooks, and only agent-monitor's. |
 | `pnpm stop` | Quit agent-monitor (same as **Quit** in the menu). |
 | `pnpm package` | Build a standalone `.app` (see below). |
 
@@ -32,8 +32,8 @@ The menu-bar dot shows the overall state: red = needs approval, green = your tur
 
 agent-monitor **never edits your agents' config on its own**: not at launch, and not when you tick or untick an agent. You add or remove its hooks with `pnpm hooks install` / `pnpm hooks uninstall`, or with the **Install hooks** / **Uninstall** buttons in the window.
 
-- **Files:** `~/.claude/settings.json` (Claude Code) and `~/.codex/hooks.json` (Codex).
-- **What's added:** one entry per event (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`, `SessionEnd`, plus `Notification` for Claude). Each entry runs this command (`pnpm hooks install` prints it too):
+- **Files:** `~/.claude/settings.json` (Claude Code), `~/.codex/hooks.json` (Codex), and `~/.cursor/hooks.json` (Cursor).
+- **What's added:** one entry per event (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`, `SessionEnd`, plus `Notification` for Claude). Cursor uses its own names: `sessionStart`, `beforeSubmitPrompt`, `postToolUse`, `postToolUseFailure`, `stop`, `sessionEnd`. Permission hooks (`preToolUse`, `beforeShellExecution`, and the rest) are not installed: Cursor blocks the tool when those hooks return no JSON, and this hook returns none, so Cursor chats do not turn red for an approval prompt. Each entry runs this command (`pnpm hooks install` prints it too):
 
   ```
   AGENT_MONITOR=1 curl -s -m 1 -X POST -H 'content-type: application/json' --data-binary @- 'http://127.0.0.1:47821/api/events?agent=claude' >/dev/null 2>&1 || true
@@ -100,6 +100,7 @@ Each card is titled with the name the harness itself shows, with the project fol
 |---|---|
 | Claude Code | desktop app title (`~/Library/Application Support/Claude/claude-code-sessions`, macOS) → the transcript's own `customTitle` (`/rename`, `--name`), then `aiTitle` — exactly what the CLI puts in the terminal tab → the name in `~/.claude/sessions/*.json`, last |
 | Codex | `thread_name` in `~/.codex/session_index.jsonl` |
+| Cursor | `title` in `~/.cursor/chats/<workspace>/<conversation>/meta.json` |
 
 Auto-generated names like `jonyfridja-81` are ignored, and the folder name is the fallback. The session-file name ranks last on purpose: a CLI started from a desktop-app terminal inherits the *host* session's name there, while its terminal tab shows its own title.
 
@@ -117,10 +118,10 @@ Theme (System / Dark / Light), **Keep screen on** (Screen Wake Lock where the br
 
 Tap a session on the phone to open a terminal-style live view of its conversation: your prompts, replies, tool calls and their (collapsed) output, following the latest activity. Tap a result to expand it; use back to return.
 
-- Works for CLI **and** desktop-app sessions (both hand hooks a `transcript_path`); it is a transcript view, not a mirror of a terminal.
-- The phone only names a session. The file path comes from the agent's own hook, must be a `.jsonl` inside `~/.claude` or `~/.codex` (symlinks resolved), and is never sent to the phone.
+- Works for CLI **and** desktop-app sessions. Claude Code uses one hooks file and one transcript tree for both; Cursor IDE and the Cursor CLI do the same. It is a transcript view, not a mirror of a terminal.
+- The phone only names a session. The file path comes from the agent's own hook, or from a `.jsonl` under `~/.claude/projects` or `~/.cursor/projects` when the hook omits it. The file must be a `.jsonl` inside `~/.claude`, `~/.codex`, or `~/.cursor` (symlinks resolved), and the path is never sent to the phone.
 - It exposes prompts, code and command output to anyone who can open the phone page, so the host window has a **"Let the phone open a session's live transcript"** switch (default on).
-- Already-running sessions get a transcript link on their next event.
+- A chat touched in the last 12 hours shows up even when its hooks never ran. Older chats get a transcript link on their next event.
 
 ## Custom notifications
 
@@ -152,4 +153,6 @@ pnpm typecheck
 - The phone screen can still sleep on some browsers: enable Android "Stay awake while charging".
 - `pnpm host` doesn't survive a reboot or logout. For that, use the packaged `.app` with **Launch at login**.
 - Esc-interrupting an agent may not fire a hook; such sessions show as idle after 10 minutes.
+- Cursor chats do not show **needs approval**. The hooks that fire while Cursor is waiting for permission also decide that permission, and an empty reply blocks the tool.
+- Cloud agents do not load `~/.cursor/hooks.json`, so they do not appear here. Local Cursor agent chats do. Cursor reloads that file on its own; Claude Code and Codex still need a new session.
 - The `.app` is ad-hoc signed and macOS-arm64 only for now (`process.arch` decides).

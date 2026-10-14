@@ -70,3 +70,47 @@ export function installedPorts(file: HookFile, events: readonly string[]): (numb
     return null;
   });
 }
+
+/** Cursor's `hooks.json`: `{ version, hooks: { event: [{ command }] } }`, not Claude's nested groups. */
+export interface CursorHookEntry {
+  command?: string;
+  [k: string]: unknown;
+}
+export interface CursorHookFile {
+  version?: number;
+  hooks?: Record<string, CursorHookEntry[]>;
+  [k: string]: unknown;
+}
+
+const portOf = (command: string | undefined): number | null => Number(/127\.0\.0\.1:(\d+)\//.exec(command ?? '')?.[1]) || null;
+const isOurCommand = (command: unknown): command is string => typeof command === 'string' && command.includes(MARKER);
+
+/** Remove our flat command entries, pruning events that end up empty. Other keys (version, matcher, timeout) stay. */
+export function removeCursorHooks(file: CursorHookFile): CursorHookFile {
+  if (!file.hooks) return file;
+  const hooks: Record<string, CursorHookEntry[]> = {};
+  for (const [event, entries] of Object.entries(file.hooks)) {
+    if (!Array.isArray(entries)) continue;
+    const kept = entries.filter((entry) => !isOurCommand(entry?.command));
+    if (kept.length > 0) hooks[event] = kept;
+  }
+  const { hooks: _old, ...rest } = file;
+  return Object.keys(hooks).length > 0 ? { ...rest, hooks } : rest;
+}
+
+/** Idempotent: strips our previous commands, then appends one fresh command per event. */
+export function addCursorHooks(file: CursorHookFile, events: readonly string[], command: string): CursorHookFile {
+  const clean = removeCursorHooks(file);
+  const hooks: Record<string, CursorHookEntry[]> = { ...(clean.hooks ?? {}) };
+  for (const event of events) hooks[event] = [...(hooks[event] ?? []), { command }];
+  return { ...clean, version: clean.version ?? 1, hooks };
+}
+
+export function installedCursorPorts(file: CursorHookFile, events: readonly string[]): (number | null)[] {
+  return events.map((event) => {
+    for (const entry of file.hooks?.[event] ?? []) {
+      if (isOurCommand(entry?.command)) return portOf(entry.command);
+    }
+    return null;
+  });
+}

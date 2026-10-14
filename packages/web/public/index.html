@@ -13,14 +13,32 @@
   <header>
     <div class="brand"><span id="conn" class="dot" title="Connection to the host"></span><span class="brand-name">agent-monitor</span></div>
     <div id="summary"></div>
+    <div class="tools">
+    <button id="filter-btn" class="icon" aria-label="Sort and filter" aria-haspopup="true" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="2" x2="6" y1="14" y2="14"/><line x1="10" x2="14" y1="8" y2="8"/><line x1="18" x2="22" y1="16" y2="16"/></svg>
+    </button>
     <button id="fs" class="icon" aria-label="Fullscreen">⛶</button>
     <button id="gear" class="icon" aria-label="Settings" aria-haspopup="true" aria-expanded="false">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
+    </div>
   </header>
 
   <div id="scrim" hidden></div>
-  <div id="menu" role="dialog" aria-label="Settings" hidden>
+  <div id="filters" class="panel" role="dialog" aria-label="Sort and filter" hidden>
+    <h2>Sort</h2>
+    <div class="flt-row">
+      <select id="sort" aria-label="Sort"></select>
+      <button type="button" id="sort-dir" aria-pressed="false"></button>
+    </div>
+    <h2>Agent</h2>
+    <select id="filter-agent" aria-label="Filter by agent"></select>
+    <h2>Status</h2>
+    <select id="filter-status" aria-label="Filter by status"></select>
+    <h2>Archive</h2>
+    <select id="filter-archive" aria-label="Filter archived chats"></select>
+  </div>
+  <div id="menu" class="panel" role="dialog" aria-label="Settings" hidden>
     <h2>Theme</h2>
     <div class="segs" role="radiogroup" aria-label="Theme">
       <label class="seg"><input type="radio" name="theme" value="system"><span>System</span></label>
@@ -55,16 +73,24 @@
     <h1>agent-monitor</h1>
     <p id="login-text">Enter the password you set on the Mac.</p>
     <input type="text" name="username" value="agent-monitor" autocomplete="username" hidden>
-    <input id="password" type="password" autocomplete="current-password" placeholder="Password" required>
+    <div id="password-row" class="pw-row">
+      <input id="password" type="password" autocomplete="current-password" placeholder="Password" required>
+      <button type="button" id="pw-toggle" class="pw-toggle" aria-label="Show password" aria-pressed="false">
+        <svg id="eye" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+        <svg id="eye-off" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+      </button>
+    </div>
     <button type="submit" id="login-btn">Log in</button>
     <p id="login-error" role="alert"></p>
   </form>
   <main id="list" aria-live="polite"></main>
   <p id="empty" hidden>No active agent sessions.<br>Start Claude Code or Codex on your Mac.</p>
+  <p id="nomatch" hidden>No sessions match these filters.</p>
   <section id="detail" hidden>
     <div class="dbar">
       <button id="back" aria-label="Back to sessions">‹</button>
       <div class="dtitle"><div id="d-project"></div><div id="d-meta"></div></div>
+      <button type="button" id="archive">Archive</button>
       <span id="d-pill"></span>
     </div>
     <div id="term" role="log" aria-live="off"></div>

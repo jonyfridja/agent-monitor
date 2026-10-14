@@ -36,7 +36,11 @@ before(async () => {
     port: PORT,
     token: 'tok',
     transcriptRoots: [root],
-    nameSources: { claudeSessionsDir: join(dir, 'claude-sessions'), codexIndex: join(dir, 'codex-index.jsonl') },
+    nameSources: {
+      claudeSessionsDir: join(dir, 'claude-sessions'),
+      codexIndex: join(dir, 'codex-index.jsonl'),
+      cursorChatsDir: join(dir, 'cursor-chats'),
+    },
   });
   await server.start();
   const ev = (id: string, path: string) => ({ hook_event_name: 'UserPromptSubmit', session_id: id, cwd: '/w/p', transcript_path: path });

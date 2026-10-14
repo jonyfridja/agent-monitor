@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createServer as createTcpServer, type Server as TcpServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { hookCommand } from '@agent-monitor/adapters';
-import type { AgentId, Session } from '@agent-monitor/protocol';
+import { AGENT_IDS, type AgentId, type Session } from '@agent-monitor/protocol';
 import { createMonitorServer, type MonitorServer } from './index.ts';
 
 /**
@@ -110,6 +110,6 @@ test('the ingest endpoint rejects a hook payload for an agent we do not track, w
     assert.equal(r.status, 0);
     assert.equal((await state()).some((s) => s.id === 'disabled-claude'), false);
   } finally {
-    server.setEnabledAgents(['claude', 'codex']);
+    server.setEnabledAgents(AGENT_IDS);
   }
 });

@@ -77,8 +77,130 @@ export function shouldMarkUnread(session, current) {
 }
 
 // ---- lists ----
-export function sortSessions(list) {
-  return [...list].sort((a, b) => view(a).rank - view(b).rank || a.stateSince - b.stateSince);
+export const LIST_SORTS = [
+  { id: 'status', label: 'Status' },
+  { id: 'name', label: 'Name' },
+  { id: 'created', label: 'Created' },
+  { id: 'active', label: 'Recently active' },
+];
+
+export const LIST_AGENTS = [
+  { id: 'claude', label: 'Claude Code' },
+  { id: 'codex', label: 'Codex' },
+  { id: 'cursor', label: 'Cursor' },
+];
+
+/** Filter values match `view().cls`. Idle includes "Idle (no activity)". */
+export const LIST_STATUSES = [
+  { id: 'approval', label: 'Needs approval' },
+  { id: 'turn', label: 'Your turn' },
+  { id: 'working', label: 'Working' },
+  { id: 'idle', label: 'Idle' },
+  { id: 'ended', label: 'Ended' },
+];
+
+export const DEFAULT_LIST = { by: 'status', reverse: false, agent: '', status: '', archived: false };
+
+/** Active chats, or only the ones this phone has archived. */
+export const LIST_ARCHIVES = [
+  { id: '', label: 'Active' },
+  { id: 'archived', label: 'Archived' },
+];
+
+const SORT_DIR = {
+  status: ['Urgent first', 'Least urgent'],
+  name: ['A–Z', 'Z–A'],
+  created: ['Newest', 'Oldest'],
+  active: ['Latest', 'Earliest'],
+};
+
+/** Saved list controls (or garbage) → a complete query. Unknown ids become the defaults. */
+export function listQuery(saved) {
+  const o = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+  return {
+    by: LIST_SORTS.some((s) => s.id === o.by) ? o.by : DEFAULT_LIST.by,
+    reverse: o.reverse === true,
+    agent: LIST_AGENTS.some((a) => a.id === o.agent) ? o.agent : '',
+    status: LIST_STATUSES.some((s) => s.id === o.status) ? o.status : '',
+    archived: o.archived === true,
+  };
+}
+
+export function sortDirLabel(by, reverse) {
+  const pair = SORT_DIR[by] ?? SORT_DIR.status;
+  return reverse ? pair[1] : pair[0];
+}
+
+const LIST_PARAMS = ['sort', 'rev', 'agent', 'status', 'archived'];
+
+/** Query string for a list view. Defaults are omitted, so an untouched list stays a clean URL. */
+export function listSearch(query) {
+  const q = listQuery(query);
+  const p = new URLSearchParams();
+  if (q.by !== DEFAULT_LIST.by) p.set('sort', q.by);
+  if (q.reverse) p.set('rev', '1');
+  if (q.agent) p.set('agent', q.agent);
+  if (q.status) p.set('status', q.status);
+  if (q.archived) p.set('archived', '1');
+  const s = p.toString();
+  return s ? `?${s}` : '';
+}
+
+/**
+ * `location.search` → list query, or null when the URL says nothing about the list
+ * (so a saved choice on the phone can still apply). Unknown values are dropped.
+ */
+export function listFromSearch(search) {
+  const p = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+  if (!LIST_PARAMS.some((k) => p.has(k))) return null;
+  return listQuery({
+    by: p.get('sort') || DEFAULT_LIST.by,
+    reverse: p.get('rev') === '1',
+    agent: p.get('agent') || '',
+    status: p.get('status') || '',
+    archived: p.get('archived') === '1',
+  });
+}
+
+/**
+ * Agent and status narrow the list. Archived chats stay out unless `archived` is set, then only those remain.
+ * `archivedKeys` is a Set of `agent:id`.
+ */
+export function filterSessions(list, { agent = '', status = '', archived = false, archivedKeys } = {}) {
+  const hidden = archivedKeys instanceof Set ? archivedKeys : new Set();
+  return [...list].filter((s) => {
+    if (agent && s.agent !== agent) return false;
+    if (status && view(s).cls !== status) return false;
+    const isArchived = hidden.has(key(s.agent, s.id));
+    return archived ? isArchived : !isArchived;
+  });
+}
+
+/** Drop archive marks whose session is gone. Mutates `archived`; returns whether anything changed. */
+export function pruneArchived(archived, sessions) {
+  let changed = false;
+  for (const k of archived) {
+    if (!sessions.has(k)) changed = archived.delete(k) || changed;
+  }
+  return changed;
+}
+
+/**
+ * `by`: status (urgent first, then longest in that state), name, created (newest first), active (latest event first).
+ * `reverse` flips that order. Default matches the original status sort. Does not mutate `list`.
+ */
+export function sortSessions(list, by = 'status', reverse = false) {
+  const nameOf = (s) => s.name || s.project || '';
+  const cmp = (a, b) => {
+    if (by === 'name') return nameOf(a).localeCompare(nameOf(b), undefined, { sensitivity: 'base' });
+    if (by === 'created') return b.startedAt - a.startedAt;
+    if (by === 'active') return b.lastEventAt - a.lastEventAt;
+    return view(a).rank - view(b).rank || a.stateSince - b.stateSince;
+  };
+  return [...list].sort((a, b) => {
+    const n = cmp(a, b);
+    return reverse ? -n : n;
+  });
 }
 
 export function splitUnread(list, unread) {
